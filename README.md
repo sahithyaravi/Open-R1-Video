@@ -63,6 +63,14 @@ Please refer to [qwen-7b.sh](qwen-7b.sh) for more details.
 
 
 ### Evaluating models
+<div style="display: flex; justify-content: center; align-items: center; margin-top: 20px;">
+    <video src="assets/split_5.mp4" controls autoplay loop style="max-width: 60%;"></video>
+</div>
+
+Sammple responses:
+
+![image](assets/sample.png)
+
 On-going...
 
 ### RL Data Reformat
