@@ -64,10 +64,8 @@ Please refer to [qwen-7b.sh](qwen-7b.sh) for more details.
 
 ### Evaluating models
 
-<div style="text-align: center;">
-    <video src="https://github.com/Wang-Xiaodong1899/Open-R1-Video/blob/main/assets/split_5.mp4" controls autoplay loop style="max-width: 60%;"></video>
-</div>
 
+[Video link](https://youtu.be/2evryGv-oZ4)
 
 Sample responses:
 
