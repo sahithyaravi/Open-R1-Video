@@ -3,7 +3,7 @@ export WANDB_NAME=llava-video-4k
 
 mkdir -p /data/wangxd/ckpt/$WANDB_PROJECT/$WANDB_NAME
 
-CUDA_VISIBLE_DEVICES=0,1,2,4 torchrun --nproc_per_node="4" \
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --nnodes="1" \
     --node_rank="0" \
     --master_addr="127.0.0.1" \
