@@ -64,6 +64,7 @@ Please refer to [qwen-7b.sh](qwen-7b.sh) for more details.
 
 ### Evaluating models
 
+![video](assets/split_5.gif)
 
 [Video link](https://youtu.be/2evryGv-oZ4)
 
