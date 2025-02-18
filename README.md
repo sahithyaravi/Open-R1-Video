@@ -13,7 +13,7 @@ We introduce R1's paradigm to video understanding tasks and open-sourced the tra
 ## Our Findings
 ### GRPO training that forces thinking can improve video understanding
 We train [Qwen2-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) on simple video dataset [open-r1-video-4k](https://huggingface.co/datasets/Xiaodong/open-r1-video-4k) using 4 x A100 (80G) GPUs, and the training only utilize video, query, and the ground truth answer (the letter of the correct answer). We only used GRPO (pure reinforcement learning without labeled reasoning trajectories) to train the model and achieved considerable rewards during model training. We release our [wandb logs](https://wandb.ai/xiaodongwang/Qwen-2-VL-7B-Video-GRPO/workspace?nw=nwuserxiaodongwang) for reference.
-![image](assets\log.png)
+![image](assets/log.png)
 
 **What We Did**
 - Introduce R1 to Video-LMM (e.g., Qwen2-VL) based on [huggingface/open-r1](https://github.com/huggingface/open-r1) and [deepseek-ai/DeepSeek-R1](https://github.com/deepseek-ai/DeepSeek-R1). 
