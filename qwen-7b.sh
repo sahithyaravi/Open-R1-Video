@@ -1,4 +1,4 @@
-export WANDB_PROJECT=Qwen-2-VL-7B-Video-GRPO
+export WANDB_PROJECT=Qwen2-VL-7B-Video-GRPO
 export WANDB_NAME=llava-video-4k
 
 mkdir -p /data/wangxd/ckpt/$WANDB_PROJECT/$WANDB_NAME
