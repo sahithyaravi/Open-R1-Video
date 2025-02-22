@@ -8,7 +8,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --node_rank="0" \
     --master_addr="127.0.0.1" \
     --master_port="12352" \
-    src/open_r1/grpo.py \
+    src/open_r1_video/grpo.py \
     --deepspeed scripts/zero3_offload.json \
     --output_dir /data/wangxd/ckpt/$WANDB_PROJECT/$WANDB_NAME \
     --model_name_or_path /data/wangxd/models/Qwen2-VL-7B-Instruct \
