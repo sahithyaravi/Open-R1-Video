@@ -89,7 +89,7 @@ Inference results:
 
 | Benchmarks                | Qwen2-VL-7B-Instruct(w.o reasoning) | Qwen2-VL-7B-Instruct(w. reasoning) | Open-R1-Video-7B(w. reasoning)  |
 |---------------------------|-------------------------------------|------------------------------------|---------------------------------|
-| LongVideoBench(16 frames) | 53.33                               | 41.89                              | 43.31                           |
+| [LongVideoBench](https://longvideobench.github.io/) (16 frames) | 53.33                               | 41.89                              | 43.31                           |
 
 
 ## RL Data Reformat
