@@ -37,7 +37,7 @@ class GRPOScriptArguments(ScriptArguments):
     """
 
     reward_funcs: list[str] = field(
-        default_factory=lambda: ["accuracy", "format"],
+        default_factory=lambda: ["accuracy",],
         metadata={"help": "List of reward functions. Possible values: 'accuracy', 'format'"},
     )
     max_pixels: Optional[int] = field(
@@ -57,6 +57,7 @@ class GRPOScriptArguments(ScriptArguments):
 def accuracy_reward(completions, solution, **kwargs):
     """Reward function that checks if the completion is correct using either symbolic verification or exact string matching."""
     contents = [completion[0]["content"] for completion in completions]
+    print(contents[:2]) # print online completion
     rewards = []
     current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
     for content, sol in zip(contents, solution):
@@ -78,11 +79,15 @@ def accuracy_reward(completions, solution, **kwargs):
 
                 # Extract answer from content if it has think/answer tags
                 content_match = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
-                student_answer = content_match.group(1).strip() if content_match else content.strip()
-
-                # Compare the extracted answers
-                if student_answer == ground_truth:
-                    reward = 1.0
+                # student_answer = content_match.group(1).strip() if content_match else content.strip()
+                if content_match:
+                    student_answer = content_match.group(1).strip()
+                    # HACK, if First letter is correct reward 1
+                    # Compare the extracted answers
+                    if student_answer[0] == ground_truth[0]:
+                        reward = 1.0
+                else:
+                    reward = 0.0
             except Exception:
                 pass  # Keep reward as 0.0 if both methods fail
 
@@ -146,7 +151,7 @@ def main(script_args, training_args, model_args):
             ],
         }
 
-    QUESTION_TEMPLATE = "{Question}  Output the thinking process in <think> </think> and final answer in <answer> </answer> tags."
+    QUESTION_TEMPLATE = "{Question} Output the thinking process in <think> </think> and final answer in <answer> </answer> tags, i.e., <think> reasoning process here </think><answer> answer here </answer>. "
 
     def make_conversation_image(example):
         return {

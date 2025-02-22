@@ -2,17 +2,18 @@
 
 We introduce R1's paradigm to video understanding tasks and open-sourced the training code and data.
 
-[🤗 Datasets](https://huggingface.co/datasets/Xiaodong/open-r1-video-4k) | [Wandb Logs](https://wandb.ai/xiaodongwang/Qwen-2-VL-7B-Video-GRPO/workspace?nw=nwuserxiaodongwang)
+[🤗 Models](https://huggingface.co/Xiaodong/Open-R1-Video-7B) | [🤗 Datasets](https://huggingface.co/datasets/Xiaodong/open-r1-video-4k) | [Wandb Logs](https://wandb.ai/xiaodongwang/Qwen2-VL-7B-Video-GRPO/runs/mb6ued4m?nw=nwuserxiaodongwang)
 
 > [!NOTE] 
 > Although our insights may not be guaranteed to be correct, we commit to sharing them truthfully and honestly. We welcome community feedback and discussions to improve our understanding on multimodal reasoning models.
 
 ## News
+- [2025/02/22] We release a provisional model [Open-R1-Video-7B](https://huggingface.co/Xiaodong/Open-R1-Video-7B), inference scripts, and evaluation results.
 - [2025/02/18] We release training code and data of Open-R1-Video!
 
 ## Our Findings
 ### GRPO training that forces thinking can improve video understanding
-We train [Qwen2-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) on simple video dataset [open-r1-video-4k](https://huggingface.co/datasets/Xiaodong/open-r1-video-4k) using 4 x A100 (80G) GPUs, and the training only utilize video, query, and the ground truth answer (the letter of the correct answer). We only used GRPO (pure reinforcement learning without labeled reasoning trajectories) to train the model and achieved promising rewards during model training. We release our [wandb logs](https://wandb.ai/xiaodongwang/Qwen-2-VL-7B-Video-GRPO/workspace?nw=nwuserxiaodongwang) for reference.
+We train [Qwen2-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) on simple video dataset [open-r1-video-4k](https://huggingface.co/datasets/Xiaodong/open-r1-video-4k) using 4 x A100 (80G) GPUs, and the training only utilize video, query, and the ground truth answer (the letter of the correct answer). We only used GRPO (pure reinforcement learning without labeled reasoning trajectories) to train the model and achieved promising rewards during model training. We release our [wandb logs](https://wandb.ai/xiaodongwang/Qwen2-VL-7B-Video-GRPO/runs/mb6ued4m?nw=nwuserxiaodongwang) for reference.
 ![image](assets/log.png)
 
 **What We Did**
@@ -62,19 +63,36 @@ bash qwen-7b.sh
 Please refer to [qwen-7b.sh](qwen-7b.sh) for more details.
 
 
-### Evaluating models
+## Evaluating models
+
+### Inference
+
+Infer the video reasoning model!
+```
+python infer.py
+```
+
 
 ![video](assets/split_5.gif)
 
 [Video link](https://youtu.be/2evryGv-oZ4)
 
-Sample responses:
+Inference results:
 
 ![image](assets/sample.png)
 
-On-going...
+### Evaluation
 
-### RL Data Reformat
+> [!NOTE] 
+> We use [Lmms-eval](https://github.com/EvolvingLMMs-Lab/lmms-eval) to evaluate models.
+
+
+| Benchmarks                | Qwen2-VL-7B-Instruct(w.o reasoning) | Qwen2-VL-7B-Instruct(w. reasoning) | Open-R1-Video-7B(w. reasoning)  |
+|---------------------------|-------------------------------------|------------------------------------|---------------------------------|
+| LongVideoBench(16 frames) | 53.33                               | 41.89                              | 43.31                           |
+
+
+## RL Data Reformat
 
 We provide the easy reformat method to obtain the data for GRPO training, which only utilize video, query, and final answer. Please refer to [format_video_data.py](scripts/format_video_data.py) for more details.
 
