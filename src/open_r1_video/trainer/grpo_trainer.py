@@ -447,10 +447,10 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         with torch.inference_mode():
             if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
+                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids, **prompt_inputs) # Fix Bug
             else:
                 with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids)
+                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, **prompt_inputs) # Fix Bug
         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
 
         # Compute the KL divergence between the model and the reference model
