@@ -56,6 +56,8 @@ git clone https://huggingface.co/datasets/malterei/LLaVA-Video-large-swift
 > [!NOTE] 
 > Our training also support single A100 (80G) GPU training. Just modify the GPU and you’re good to go!
 
+> We removed format accuracy during 7B model training and slightly modified the final answer matching to calculate the accuracy reward. See this [commit](https://github.com/Wang-Xiaodong1899/Open-R1-Video/commit/2679e082aaf608fd167a0ad5e6f2afb4f548e25f#diff-d6985fa15a3c7864e723ebd4c04bfdc2f13c5e87af36f87d656e32666f8e0eeb).
+
 To run GRPO on Qwen2-VL-7B:
 
 ```
@@ -111,3 +113,17 @@ The related projects are as follows:
 - [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF)
 - [LLaVA-NeXT](https://github.com/LLaVA-VL/LLaVA-NeXT)
 - [LLaVA-Video-large-swift](https://huggingface.co/datasets/malterei/LLaVA-Video-large-swift)
+
+## Citation
+If you find this useful, you can choose to cite us.
+
+```bibtex
+@misc{wang-2025-open-r1-video,
+  author = {Xiaodong Wang and Peixi Peng},
+  title = {Open-R1-Video},
+  year = {2025},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/Wang-Xiaodong1899/Open-R1-Video}}
+}
+```
