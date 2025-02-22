@@ -55,6 +55,7 @@ git clone https://huggingface.co/datasets/malterei/LLaVA-Video-large-swift
 ### GRPO on Qwen2-VL/7B
 > [!NOTE] 
 > Our training also support single A100 (80G) GPU training. Just modify the GPU and you’re good to go!
+
 To run GRPO on Qwen2-VL-7B:
 
 ```
