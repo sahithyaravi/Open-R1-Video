@@ -4,18 +4,26 @@
 #SBATCH --gres=gpu:h100:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=0
-#SBATCH --time=1:10:00
-
-module load scipy-stack/2025a
-module load gcc opencv
-module load gcc arrow
-module load cuda
+#SBATCH --time=10:10:00
+deactivate
 module load python/3.10.13 
+module load scipy-stack/2024a
+module load gcc opencv
+module load cuda
+module load gcc arrow/15.0.1
 
-source /home/sahiravi/projects/aip-vshwartz/sahiravi/r1/bin/activate
+source /home/sahiravi/projects/aip-vshwartz/sahiravi/videor1/bin/activate
+
+# display current python venv
+echo "Current Python Virtual Environment:"
+which python
+# display current python version
+echo "Current Python Version:"
+python --version
+
 export WANDB_API_KEY=3596e10c718e17ba4c1ba6fc462b2ad582eb0dcc
 export WANDB_PROJECT=Qwen2-VL-7B-Video-GRPO
-export WANDB_NAME=llava-video-4k-remove-formatreward-matchletterreward-f16
+export WANDB_NAME=llava-video-4k-remove-formatreward-matchletterreward-f16-full
 export FLASH_ATTENTION_USE_TILED=1
 export FLASH_ATTENTION_BLOCK_HEURISTIC=2
 
@@ -42,11 +50,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --report_to wandb \
     --gradient_checkpointing true \
     --torch_dtype 'bfloat16' \
+    --bf16 true \
     --attn_implementation flash_attention_2 \
     --num_train_epochs 1 \
     --run_name $WANDB_NAME \
-    --save_steps 10 \
-    --num_generations 2\
+    --save_steps 100 \
+    --num_generations 4\
     --save_only_model true
 
 

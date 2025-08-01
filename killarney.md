@@ -54,5 +54,6 @@ unzip transformers-main.zip
 cd ./transformers-main
 pip install .
 pip install trl==0.16.0
+pip install torchvision
 ```
 You are now ready to use the cluster environment!  

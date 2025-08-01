@@ -270,7 +270,7 @@ def get_video_reader_backend() -> str:
         video_reader_backend = "decord"
     else:
         video_reader_backend = "torchvision"
-    print(f"qwen-vl-utils using {video_reader_backend} to read video.", file=sys.stderr)
+    # print(f"qwen-vl-utils using {video_reader_backend} to read video.", file=sys.stderr)
     return video_reader_backend
 
 
@@ -322,7 +322,7 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR, return_video_sample
         ).float()
 
         # import pdb; pdb.set_trace()
-        print(f'video shape {video.shape}')
+        # print(f'video shape {video.shape}')
 
         if return_video_sample_fps:
             return video, sample_fps
