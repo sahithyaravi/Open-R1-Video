@@ -46,7 +46,7 @@ processor = AutoProcessor.from_pretrained(model_path)
 # """
 
 
-video_path = "/home/sahiravi/scratch/oops/oops_val_v1_merged/13_D_merged.mp4"
+video_path = "/home/sahiravi/scratch/oops/oops_val_v1_merged/13_E_merged.mp4"
 query = """
 Describe this video in detail.
 Output the thinking process in <think> </think> and final answer in <answer> </answer> tags, i.e., <think> reasoning process here </think><answer> answer here </answer>.

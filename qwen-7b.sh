@@ -10,8 +10,7 @@ module load python/3.10.13
 module load scipy-stack/2024a
 module load gcc opencv
 module load cuda
-module load gcc arrow/15.0.1
-
+module load gcc arrow/16.1.0 
 source /home/sahiravi/projects/aip-vshwartz/sahiravi/videor1/bin/activate
 
 # display current python venv
@@ -39,7 +38,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --output_dir data/ckpt/$WANDB_PROJECT/$WANDB_NAME \
     --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
     --dataset_name xxx \
-    --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-origin.jsonl \
+    --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-beliefs.jsonl \
     --max_prompt_length 16384 \
     --learning_rate 1e-6 \
     --beta 0.1 \

@@ -22,7 +22,7 @@ from datasets import load_dataset
 from transformers import Qwen2VLForConditionalGeneration
 
 from math_verify import parse, verify
-from open_r1_video.trainer import Qwen2VLGRPOTrainer
+from open_r1_video.trainer import Qwen2VLGRPOTrainer, Qwen2VLGRPOTrainerBelief
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 
 
@@ -147,7 +147,7 @@ def main(script_args, training_args, model_args):
         return {
             "prompt": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["problem"]},
+                {"role": "user", "content": "Caption this video." }, #
             ],
         }
 
@@ -193,7 +193,7 @@ def main(script_args, training_args, model_args):
     
     # import pdb; pdb.set_trace()
 
-    trainer_cls = Qwen2VLGRPOTrainer
+    trainer_cls =  Qwen2VLGRPOTrainerBelief#Qwen2VLGRPOTrainer
 
     # Initialize the GRPO trainer
     trainer = trainer_cls(
