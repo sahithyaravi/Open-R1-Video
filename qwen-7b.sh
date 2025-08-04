@@ -8,7 +8,7 @@
 deactivate
 module load python/3.10.13 
 module load scipy-stack/2024a
-module load gcc opencv
+module load gcc opencv/4.11.0
 module load cuda
 module load gcc arrow/16.1.0 
 source /home/sahiravi/projects/aip-vshwartz/sahiravi/videor1/bin/activate

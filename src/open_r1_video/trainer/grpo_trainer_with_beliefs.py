@@ -297,9 +297,8 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
         # Initialize the metrics
         self._metrics = defaultdict(list)
-        self.sim_encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2").to(
-            self.accelerator.device
-        )
+        self.sim_encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        
 
         super().__init__(
             model=model,
@@ -395,13 +394,6 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             raise ValueError(
                 "This customised compute_loss does not support returning outputs"
             )
-
-        device = self.accelerator.device if hasattr(self, "accelerator") else torch.device("cpu")
-
-        if not inputs:
-            # Guard against empty input list
-            return torch.tensor(0.0, device=device)
-
         similarities: List[float] = []
 
         for example in inputs:
@@ -421,9 +413,11 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
             # Extract a fixed number of frames from the video.  Default to k=8
             try:
-                frames, frame_indices, total_frames, fps = extract_k_frames_decord_cpu(
+                frames, frame_indices, total_frames, fps, vr = extract_k_frames_decord_cpu(
                     video_path=video_path, k=8
                 )
+                print(f"Extracted {len(frames)} frames from video {video_path} "
+                      f"({total_frames} total frames at {fps} FPS).")
             except Exception as e:
                 # Propagate errors during frame extraction to the caller with context
                 raise RuntimeError(
@@ -440,7 +434,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                     top_k=3,
                     method="prior_frame_bayesian_approach",
                     caption_video=True,
-                    vr=None,
+                    vr=vr,
                     model=model,
                     processor=self.processing_class,
                 )
@@ -456,7 +450,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             similarities.append(sim)
 
         # Convert similarities to a tensor on the correct device
-        sim_tensor = torch.tensor(similarities, dtype=torch.float32, device=device)
+        sim_tensor = torch.tensor(similarities, dtype=torch.float16)
         # Reward is the similarity; loss is negative reward (mean across batch)
         loss = -sim_tensor.mean()
 

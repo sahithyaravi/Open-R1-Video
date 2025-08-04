@@ -98,7 +98,7 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
                         {"type": "video"}],
         }
     ]
-    h0 = generate_hypothesis(conv, context_frames, num_generations=num_hypotheses)
+    h0 = generate_hypothesis(conv, context_frames, num_generations=num_hypotheses, model=model, processor=processor)
 
     # Sample hypotheses based on W, H and O
     conv = [
@@ -109,7 +109,7 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
                         {"type": "video"},],
         }
     ]
-    h1 = generate_hypothesis(conv, context_frames + [observed_frame], num_generations=3, model=model, processor=processor)
+    h1 = generate_hypothesis(conv, context_frames + [observed_frame], num_generations=num_hypotheses, model=model, processor=processor)
     hypotheses = h0 + h1
 
     # Compute P_Prior
