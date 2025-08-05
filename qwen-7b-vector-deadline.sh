@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --qos=a100_sahiravi
+#SBATCH --qos=deadline
+#SBATCH --account=deadline
 #SBATCH --job-name=qwen2
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=100G
-#SBATCH --partition=a100
+#SBATCH --mem=0 
 #SBATCH --time=6:00:00
 
 export WANDB_API_KEY=3596e10c718e17ba4c1ba6fc462b2ad582eb0dcc
