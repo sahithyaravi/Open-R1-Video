@@ -98,6 +98,13 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
                         {"type": "video"}],
         }
     ]
+    print(conv)
+    print(f"Generating {num_hypotheses} hypotheses based on memory and context frames.")
+    print(f"Memory text: {memory_text}")
+    print(f"Context frames: {len(context_frames)} frames")
+    print(f"Observed frame: {observed_frame.size if isinstance(observed_frame, Image.Image) else 'N/A'}")
+    print(f"Model: {model.__class__.__name__ if model else 'None'}")
+    print(f"Processor: {processor.__class__.__name__ if processor else 'None'}")
     h0 = generate_hypothesis(conv, context_frames, num_generations=num_hypotheses, model=model, processor=processor)
 
     # Sample hypotheses based on W, H and O
