@@ -2,8 +2,8 @@
 #SBATCH --qos=deadline
 #SBATCH --account=deadline
 #SBATCH --job-name=qwen2
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:a100:4
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=0 
 #SBATCH --time=6:00:00
 
@@ -12,8 +12,9 @@ export WANDB_PROJECT=Qwen2-VL-7B-Video-GRPO
 export WANDB_NAME=llava-video-4k-remove-formatreward-matchletterreward-f16-full
 export FLASH_ATTENTION_USE_TILED=1
 export FLASH_ATTENTION_BLOCK_HEURISTIC=2
-
-mkdir -p data/wangxd/ckpt/$WANDB_PROJECT/$WANDB_NAME
+export TORCH_USE_CUDA_DSA=1
+export CUDA_LAUNCH_BLOCKING=1
+mkdir -p /h/sahiravi/scratch/data/wangxd/ckpt/$WANDB_PROJECT/$WANDB_NAME
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --nnodes="1" \
@@ -25,7 +26,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --output_dir data/ckpt/$WANDB_PROJECT/$WANDB_NAME \
     --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
     --dataset_name xxx \
-    --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-beliefs.jsonl \
+    --jsonl_path /h/sahiravi/scratch/data/LLaVA-Video-large-swift-beliefs.jsonl \
     --max_prompt_length 16384 \
     --learning_rate 1e-6 \
     --beta 0.1 \

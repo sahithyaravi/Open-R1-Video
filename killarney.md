@@ -7,10 +7,10 @@ Follow the steps below to set up the environment and install the required depend
 ## 1. Load Required Modules
 ```bash
 module load python/3.10.13 
-module load scipy-stack/2025a
-module load gcc opencv
-module load gcc arrow/19.0.1
+module load scipy-stack/2024a
+module load gcc opencv/4.11.0
 module load gcc cuda
+module load gcc arrow/16.1.0 
 module load rust
 ```
 

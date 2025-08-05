@@ -2,7 +2,7 @@
 #SBATCH --account=aip-vshwartz
 #SBATCH --job-name=qwen2
 #SBATCH --gres=gpu:h100:4
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=0
 #SBATCH --time=10:10:00
 deactivate
