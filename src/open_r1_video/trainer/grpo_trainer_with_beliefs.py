@@ -57,7 +57,8 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
-
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionAttention
+VisionAttention.is_causal=False
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
@@ -427,7 +428,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             # Generate caption using the Qwen surprise tracker.  We set
             # caption_video=True to obtain a textual summary.  Additional arguments
             # such as window_size and top_k default to recommended values.
-            unwrapped_model = unwrap_model_for_generation(model, self.accelerator)
+            unwrapped_model = model
             try:
                 result = qwen_surprise_tracker(
                     frames=frames,

@@ -40,20 +40,16 @@ def generate_hypothesis(conv, visual_context, num_generations=3, model=None, pro
     print(f"Generating {num_generations} hypotheses based on the prompt: {prompt}")
     print("Shape of each tensor in inputs:", {k: v.shape for k, v in inputs.items()})
 
-    max_prompt_length = 8192
-
-    inputs["input_ids"] = inputs["input_ids"][:, -max_prompt_length :]
-    inputs["attention_mask"] = inputs["attention_mask"][:, -max_prompt_length :]
-
-    outputs = model.generate(
-        **inputs.to(model.device),
-        do_sample=True,
-        temperature=1.0,
-        top_k=50,
-        num_return_sequences=num_generations,
-        max_new_tokens=40,
-        pad_token_id=processor.pad_token_id,
-    )
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs.to(model.device),
+            do_sample=True,
+            temperature=1.0,
+            top_k=50,
+            num_return_sequences=num_generations,
+            max_new_tokens=40,
+            pad_token_id=processor.pad_token_id,
+        )
     hypotheses = processor.batch_decode(outputs, skip_special_tokens=True)
     # print(f"Generated {len(hypotheses)} hypotheses.")
     hypotheses = [hyp.strip().lower().split("assistant\n")[1].replace(":", "") for hyp in hypotheses]

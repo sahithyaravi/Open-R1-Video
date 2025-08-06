@@ -21,7 +21,7 @@ echo "Current Python Version:"
 python --version
 
 export WANDB_API_KEY=3596e10c718e17ba4c1ba6fc462b2ad582eb0dcc
-export WANDB_PROJECT=Qwen2-VL-7B-Video-GRPO
+export WANDB_PROJECT=Qwen2-VL-7B-Video-GRPO-dummy
 export WANDB_NAME=llava-video-4k-remove-formatreward-matchletterreward-f16-full
 export FLASH_ATTENTION_USE_TILED=1
 export FLASH_ATTENTION_BLOCK_HEURISTIC=2
@@ -38,8 +38,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --output_dir data/ckpt/$WANDB_PROJECT/$WANDB_NAME \
     --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
     --dataset_name xxx \
-    --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-beliefs.jsonl \
-    --max_prompt_length 16384 \
+    --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-origin.jsonl \
+    --max_prompt_length 8196 \
     --learning_rate 1e-6 \
     --beta 0.1 \
     --per_device_train_batch_size 1 \

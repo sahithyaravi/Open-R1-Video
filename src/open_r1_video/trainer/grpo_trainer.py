@@ -48,6 +48,8 @@ from trl.trainer.utils import generate_model_card, get_comet_experiment_url
 
 
 from qwen_vl_utils import process_vision_info
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionAttention
+VisionAttention.is_causal=False
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
