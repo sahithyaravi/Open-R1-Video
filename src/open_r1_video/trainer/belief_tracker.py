@@ -32,15 +32,27 @@ def summarize_memory(memory_text: str) -> str:
     
 def generate_hypothesis(conv, visual_context, num_generations=3, model=None, processor=None):
     prompt = processor.apply_chat_template(
-    conv, add_generation_prompt=True,)
-    inputs = processor(text=prompt, videos=visual_context, return_tensors="pt")
+    conv, add_generation_prompt=True, )
+    inputs = processor(text=prompt, videos=visual_context, return_tensors="pt",             
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,)
+    print(f"Generating {num_generations} hypotheses based on the prompt: {prompt}")
+    print("Shape of each tensor in inputs:", {k: v.shape for k, v in inputs.items()})
+
+    max_prompt_length = 8192
+
+    inputs["input_ids"] = inputs["input_ids"][:, -max_prompt_length :]
+    inputs["attention_mask"] = inputs["attention_mask"][:, -max_prompt_length :]
+
     outputs = model.generate(
         **inputs.to(model.device),
         do_sample=True,
-        temperature=1.1,
+        temperature=1.0,
         top_k=50,
         num_return_sequences=num_generations,
         max_new_tokens=40,
+        pad_token_id=processor.pad_token_id,
     )
     hypotheses = processor.batch_decode(outputs, skip_special_tokens=True)
     # print(f"Generated {len(hypotheses)} hypotheses.")
@@ -94,18 +106,22 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         {
             "role": "user", 
             "content": [{"type": "text", "text" : f"Here is what happened so far from the beginning of the video: {memory_text}"},
-                        {"type": "text", "text": "Based on this information, and recent frames from the video, answer in one sentence what will most likely happen in the next frame."},
+                        {"type": "text", "text": f"Based on this information, and recent frames from the video, answer in one sentence what will most likely happen in the next frame."},
                         {"type": "video"}],
         }
     ]
-    print(conv)
-    print(f"Generating {num_hypotheses} hypotheses based on memory and context frames.")
-    print(f"Memory text: {memory_text}")
-    print(f"Context frames: {len(context_frames)} frames")
-    print(f"Observed frame: {observed_frame.size if isinstance(observed_frame, Image.Image) else 'N/A'}")
-    print(f"Model: {model.__class__.__name__ if model else 'None'}")
-    print(f"Processor: {processor.__class__.__name__ if processor else 'None'}")
+    # print(conv)
+    # print(f"Generating {num_hypotheses} hypotheses based on memory and context frames.")
+    # print(f"Memory text: {memory_text}")
+    # print(f"Context frames: {len(context_frames)} frames")
+    # print(f"Observed frame: type {type(observed_frame)}, size {observed_frame.size}")
+    # print(f"Model: {model.__class__.__name__ if model else 'None'}")
+    # print(f"Processor: {processor.__class__.__name__ if processor else 'None'}")
     h0 = generate_hypothesis(conv, context_frames, num_generations=num_hypotheses, model=model, processor=processor)
+    print("Generated hypotheses based on memory and context frames:")
+    for i, hyp in enumerate(h0):
+        print(f"Hypothesis {i+1}: {hyp}")
+    print("Hypotheses:", h0)
 
     # Sample hypotheses based on W, H and O
     conv = [

@@ -427,15 +427,16 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             # Generate caption using the Qwen surprise tracker.  We set
             # caption_video=True to obtain a textual summary.  Additional arguments
             # such as window_size and top_k default to recommended values.
+            unwrapped_model = unwrap_model_for_generation(model, self.accelerator)
             try:
                 result = qwen_surprise_tracker(
                     frames=frames,
                     window_size=4,
-                    top_k=3,
+                    top_k=1,
                     method="prior_frame_bayesian_approach",
                     caption_video=True,
                     vr=vr,
-                    model=model,
+                    model=unwrapped_model,
                     processor=self.processing_class,
                 )
                 predicted_caption = result["caption_weighted"]
