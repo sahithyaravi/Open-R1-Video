@@ -32,7 +32,7 @@ def summarize_memory(memory_text: str) -> str:
     
 def generate_hypothesis(conv, visual_context, num_generations=3, model=None, processor=None):
     prompt = processor.apply_chat_template(
-    conv, add_generation_prompt=True, )
+    conv, add_generation_prompt=True,tokenize=False )
     inputs = processor(text=prompt, videos=visual_context, return_tensors="pt",             
             padding=True,
             padding_side="left",
@@ -40,16 +40,16 @@ def generate_hypothesis(conv, visual_context, num_generations=3, model=None, pro
     print(f"Generating {num_generations} hypotheses based on the prompt: {prompt}")
     print("Shape of each tensor in inputs:", {k: v.shape for k, v in inputs.items()})
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs.to(model.device),
-            do_sample=True,
-            temperature=1.0,
-            top_k=50,
-            num_return_sequences=num_generations,
-            max_new_tokens=40,
-            pad_token_id=processor.pad_token_id,
-        )
+    # with torch.no_grad():
+    outputs = model.generate(
+        **inputs.to(model.device),
+        do_sample=True,
+        temperature=1.0,
+        top_k=50,
+        num_return_sequences=num_generations,
+        max_new_tokens=40,
+        pad_token_id=processor.pad_token_id,
+    )
     hypotheses = processor.batch_decode(outputs, skip_special_tokens=True)
     # print(f"Generated {len(hypotheses)} hypotheses.")
     hypotheses = [hyp.strip().lower().split("assistant\n")[1].replace(":", "") for hyp in hypotheses]
@@ -106,30 +106,19 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
                         {"type": "video"}],
         }
     ]
-    # print(conv)
-    # print(f"Generating {num_hypotheses} hypotheses based on memory and context frames.")
-    # print(f"Memory text: {memory_text}")
-    # print(f"Context frames: {len(context_frames)} frames")
-    # print(f"Observed frame: type {type(observed_frame)}, size {observed_frame.size}")
-    # print(f"Model: {model.__class__.__name__ if model else 'None'}")
-    # print(f"Processor: {processor.__class__.__name__ if processor else 'None'}")
+    print(len(context_frames), "context frames")
     h0 = generate_hypothesis(conv, context_frames, num_generations=num_hypotheses, model=model, processor=processor)
-    print("Generated hypotheses based on memory and context frames:")
-    for i, hyp in enumerate(h0):
-        print(f"Hypothesis {i+1}: {hyp}")
-    print("Hypotheses:", h0)
-
     # Sample hypotheses based on W, H and O
     conv = [
         {
             "role": "user",
             "content": [{"type": "text", "text" : f"Here is what happened so far from the beginning of the video: {memory_text}"},
-                        {"type": "text", "text": "You are also provided with recent frames from the video. Answer in one sentence what is happening now."},
-                        {"type": "video"},],
+                        {"type": "text", "text": "You are now provided with recent frames from the video. Answer in one sentence what is happening now."},
+                        {"type": "video"}],
         }
     ]
-    h1 = generate_hypothesis(conv, context_frames + [observed_frame], num_generations=num_hypotheses, model=model, processor=processor)
-    hypotheses = h0 + h1
+    # h1 = generate_hypothesis(conv, observed_frame, num_generations=num_hypotheses, model=model, processor=processor)
+    hypotheses = h0
 
     # Compute P_Prior
     prior_scores = []
@@ -167,10 +156,8 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         # mask: ignore input prompt or prefix tokens in the loss
         labels = full_input.input_ids.clone()
         labels[:, :prefix_len] = -100
-
-        with torch.no_grad():
-            loss = model(**full_input.to(model.device), labels=labels).loss
-        prior_scores.append(-loss.item())                
+        loss = model(**full_input.to(model.device), labels=labels).loss
+        prior_scores.append(-loss)                
         del full_input, labels, loss
         torch.cuda.empty_cache()
         gc.collect()
@@ -205,19 +192,14 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
             }
         ]
 
-        prompt_obs = processor.apply_chat_template(conv_obs, add_generation_prompt=True)
-        # print(repr(prompt_obs[-120:]))      
+        prompt_obs = processor.apply_chat_template(conv_obs, add_generation_prompt=True)   
         inp_obs = processor(
             text=prompt_obs,
             videos=all_frames,                
             return_tensors="pt"
         )
 
-        with torch.no_grad():
-            # logits shape: (batch_size, sequence_length, vocab_size)
-            logits = model(**inp_obs.to(model.device)).logits[0, -1] 
-
-
+        logits = model(**inp_obs.to(model.device)).logits[0, -1] 
         sub_logits = logits[[yes_id, no_id]]             
         logprob_yes = sub_logits.log_softmax(dim=-1)[0]    # log P(yes|hyp, obs)
         log_like.append(logprob_yes)
@@ -232,29 +214,17 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
     P_post     = log_post.exp()
 
 
-    kl  = torch.sum(P_post * (log_post - log_prior)).item()
-
-    # kl_torch = kl_div(
-    #     input = log_post,                 # log-probs
-    #     target = log_prior.exp(),         # plain probs
-    #     reduction = "sum",                # ∑_h  p_post * (log p_post − log p_prior)
-    #     log_target = False                # because target is in probability space
-    #  ).item()
+    kl  = torch.sum(P_post * (log_post - log_prior))
     
     log_mix = torch.logaddexp(log_prior, log_post) - math.log(2.0)      # log M
     js  = 0.5 * (
             torch.sum(P_prior * (log_prior - log_mix)) +
             torch.sum(P_post  * (log_post  - log_mix))
         )
-    js_norm = (js / math.log(2.0)).item()
-
-    # --- per-belief (signed) JS contribution ------------------------------------
+    js_norm = (js / math.log(2.0))
     d_js = 0.5 * (P_prior * (log_prior - log_mix) +
                 P_post  * (log_post  - log_mix))           # tensor, same length as hypotheses
 
-
-    
-    # add prior, posterior as string to each hypothesis in hypotheses
     hypotheses = [
         f"{hyp} (prior: {P_prior[i]:.3f}, posterior: {P_post[i]:.3f}), JS: {d_js[i]:.3f}"
         for i, hyp in enumerate(hypotheses)
@@ -282,6 +252,8 @@ def run_bayesian_surprise_over_video(video_frames, window_size, num_hypotheses, 
     posteriors = []
     hypotheses = []
 
+    print(video_frames)
+    print("Length of video frames", len(video_frames))
     for i in tqdm(range(window_size, len(video_frames), 1), desc="Processing frames"):
         prior_window = video_frames[i-window_size:i]
         observed_frame = video_frames[i]
@@ -352,6 +324,9 @@ def qwen_surprise_tracker(
         processor=processor
 
     )
+
+    print("Computed surprise scores for all frames.")
+    print("Explanations", surprise_output["explanations"])
 
     if caption_video:
         caption_weighted, sampled_frames_weighted = caption_by_weight(

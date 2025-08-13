@@ -193,7 +193,7 @@ def main(script_args, training_args, model_args):
     
     # import pdb; pdb.set_trace()
 
-    trainer_cls =  Qwen2VLGRPOTrainer
+    trainer_cls =  Qwen2VLGRPOTrainerBelief
 
     # Initialize the GRPO trainer
     trainer = trainer_cls(

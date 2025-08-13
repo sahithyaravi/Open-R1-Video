@@ -318,10 +318,10 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         self.model_accepts_loss_kwargs = False
 
         if self.ref_model is not None:
-            if self.is_deepspeed_enabled:
-                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
-            else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+            # if self.is_deepspeed_enabled:
+            #     self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            # else:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
@@ -433,7 +433,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 result = qwen_surprise_tracker(
                     frames=frames,
                     window_size=4,
-                    top_k=1,
+                    top_k=3,
                     method="prior_frame_bayesian_approach",
                     caption_video=True,
                     vr=vr,

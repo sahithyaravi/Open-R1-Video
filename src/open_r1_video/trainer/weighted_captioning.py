@@ -1,7 +1,7 @@
 
 from PIL import Image
 
-
+import torch
 import numpy as np
 
 
@@ -30,6 +30,8 @@ def adaptive_frame_sampling(
     intervals = np.linspace(0.0, duration, n_intervals + 1)
     base_allocation = np.ones(n_intervals, dtype=int)
     remaining_frames = max_frames - n_intervals
+    scores = [score.cpu() if isinstance(score, torch.Tensor) else score for score in scores]
+    print("Scores:", scores)
 
     if len(set(scores)) == 1:
         print("All scores are equal, distributing remaining frames uniformly.")
@@ -118,6 +120,7 @@ def caption_by_weight(model, processor, frames, scores, vr):
         List of generated captions.
     """
     sampled_frames, frame_indices = adaptive_frame_sampling(scores=scores, vr=vr)
+    print(f"Sampled {len(sampled_frames)} frames from {len(scores)} scores.")
     caption = caption_frames(model, processor, sampled_frames, scores)
     return caption, str(frame_indices)
 
