@@ -31,25 +31,22 @@ def adaptive_frame_sampling(
     base_allocation = np.ones(n_intervals, dtype=int)
     remaining_frames = max_frames - n_intervals
    
-    # clone each element of scores to a tensor
-    # scores_t = torch.tensor(scores, dtype=torch.float32, device="cpu")
-    # scores_np = np.array([s.item() for s in scores_t], dtype=float)
-    # if len(set(scores)) == 1:
-    print("All scores are equal, distributing remaining frames uniformly.")
-    extra_allocation = np.full(n_intervals, remaining_frames // n_intervals, dtype=int)
-    for i in range(remaining_frames % n_intervals):
-        extra_allocation[i] += 1
-    # else:
-    #     probs = scores_np / (np.sum(scores_np) + 1e-8)  # Avoid division by zero
-    #     extra_allocation = np.floor(probs * remaining_frames).astype(int)
-    #     while extra_allocation.sum() < remaining_frames:
-    #         residual = probs - extra_allocation
-    #         idx = residual.argmax()
-    #         extra_allocation[idx] += 1
+    if len(set(scores)) == 1:
+        print("All scores are equal, distributing remaining frames uniformly.")
+        extra_allocation = np.full(n_intervals, remaining_frames // n_intervals, dtype=int)
+        for i in range(remaining_frames % n_intervals):
+            extra_allocation[i] += 1
+    else:
+        scores_t = torch.tensor(scores, dtype=torch.float32, device="cpu")
+        scores_np = np.array([s.item() for s in scores_t], dtype=float)
+        probs = scores_np / (np.sum(scores_np) + 1e-8)  # Avoid division by zero
+        extra_allocation = np.floor(probs * remaining_frames).astype(int)
+        while extra_allocation.sum() < remaining_frames:
+            residual = probs - extra_allocation
+            idx = residual.argmax()
+            extra_allocation[idx] += 1
 
-    # allocation = base_allocation + extra_allocation
-
-    allocation = base_allocation
+    allocation = base_allocation + extra_allocation
     # # Use allocation to pick timestamps from intervals
     time_stamps = []
     for idx, n in enumerate(allocation):
@@ -67,7 +64,6 @@ def adaptive_frame_sampling(
     time_stamps = np.clip(time_stamps, 0, duration)
     frame_indices = np.unique((np.array(time_stamps) * fps).astype(int)).tolist()
     frames_nd = vr.get_batch(frame_indices).asnumpy()
-    # print("Check if scores need grad", scores.required_grad)
     return [Image.fromarray(f) for f in frames_nd], frame_indices
    
 
@@ -122,7 +118,6 @@ def caption_by_weight(model, processor, frames, scores, vr):
         List of generated captions.
     """
     sampled_frames, frame_indices = adaptive_frame_sampling(scores=scores, vr=vr)
-    # print(f"Sampled {len(sampled_frames)} frames from {len(scores)} scores.")
     caption = caption_frames(model, processor, sampled_frames, scores)
     return caption, str(frame_indices)
 
