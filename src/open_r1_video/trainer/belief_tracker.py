@@ -12,7 +12,7 @@ import math
 import gc
 import numpy as np
 
-from .weighted_captioning import caption_by_weight
+from .weighted_captioning_grad import caption_by_weight
 
 
 
