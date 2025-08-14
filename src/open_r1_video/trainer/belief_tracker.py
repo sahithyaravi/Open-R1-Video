@@ -37,10 +37,7 @@ def generate_hypothesis(conv, visual_context, num_generations=3, model=None, pro
             padding=True,
             padding_side="left",
             add_special_tokens=False,)
-    print(f"Generating {num_generations} hypotheses based on the prompt: {prompt}")
-    print("Shape of each tensor in inputs:", {k: v.shape for k, v in inputs.items()})
 
-    # with torch.no_grad():
     outputs = model.generate(
         **inputs.to(model.device),
         do_sample=True,
@@ -51,10 +48,7 @@ def generate_hypothesis(conv, visual_context, num_generations=3, model=None, pro
         pad_token_id=processor.pad_token_id,
     )
     hypotheses = processor.batch_decode(outputs, skip_special_tokens=True)
-    # print(f"Generated {len(hypotheses)} hypotheses.")
     hypotheses = [hyp.strip().lower().split("assistant\n")[1].replace(":", "") for hyp in hypotheses]
-    torch.cuda.empty_cache()
-    gc.collect()
     return hypotheses
 
 
@@ -106,7 +100,6 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
                         {"type": "video"}],
         }
     ]
-    print(len(context_frames), "context frames")
     h0 = generate_hypothesis(conv, context_frames, num_generations=num_hypotheses, model=model, processor=processor)
     # Sample hypotheses based on W, H and O
     conv = [
@@ -119,50 +112,36 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
     ]
     # h1 = generate_hypothesis(conv, observed_frame, num_generations=num_hypotheses, model=model, processor=processor)
     hypotheses = h0
-
-    # Compute P_Prior
     prior_scores = []
+   # --- PRIOR (fix) ---
     prefix_conv = [
         {
             "role": "user",
             "content": [
-                {"type": "text",
-                "text": f"Here is what has happened so far: {memory_text}"},
+                {"type": "text", "text": f"Here is what has happened so far: {memory_text}"},
                 {"type": "video"},
-                {"type": "text",
-                "text": "Here is what will happen next:"},   # neutral anchor line
             ],
         }
     ]
-    prefix_prompt = processor.apply_chat_template(
-        prefix_conv, add_generation_prompt=False
-    )
-    prefix_inputs = processor(
-        text=prefix_prompt,
-        videos=context_frames,          # the k past frames
-        return_tensors="pt"
-    )
-    prefix_len = prefix_inputs.input_ids.size(1)        # tokens in the input prompt
-    # empty cuda cache
-    torch.cuda.empty_cache()
-    for hyp in hypotheses:
-        full_txt   = prefix_prompt + hyp 
-        full_input = processor(
-            text=full_txt,
-            videos=context_frames,      # same frames each time
-            return_tensors="pt"
-        )
+    # Put the model at the start of the assistant turn
+    prefix_prompt = processor.apply_chat_template(prefix_conv, add_generation_prompt=True)
 
-        # mask: ignore input prompt or prefix tokens in the loss
+    # Tokenize just the prompt (no continuation yet)
+    prefix_inputs = processor(text=prefix_prompt, videos=context_frames, return_tensors="pt")
+    prefix_len = prefix_inputs.input_ids.size(1)
+
+    prior_scores = []
+    for hyp in hypotheses:
+        cont = "This will happen next: " + hyp
+        full_txt = prefix_prompt + cont
+        full_input = processor(text=full_txt, videos=context_frames, return_tensors="pt")
+
         labels = full_input.input_ids.clone()
-        labels[:, :prefix_len] = -100
+        labels[:, :prefix_len] = -100  # score only the continuation
         loss = model(**full_input.to(model.device), labels=labels).loss
-        prior_scores.append(-loss)                
-        del full_input, labels, loss
-        torch.cuda.empty_cache()
-        gc.collect()
+        prior_scores.append(-loss)
     log_prior_raw = torch.tensor(prior_scores, device=model.device)     # negative log likelihoods
-    log_prior = log_prior_raw - torch.logsumexp(log_prior_raw, dim=0)   # log P(h) - https://gregorygundersen.com/blog/2020/02/09/log-sum-exp/
+    log_prior = log_prior_raw - torch.logsumexp(log_prior_raw, dim=0)   # log P(h) 
     P_prior   = log_prior.exp()      
 
     # Compute posterior
@@ -171,11 +150,22 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         ids = processor.tokenizer.encode(tok, add_special_tokens=False)
         assert len(ids) == 1, f"‘{tok}’ splits into {ids}"
         return ids[0]
+    
+    def cont_logprob(prompt_text, vids, cont_text):
+        prompt_inputs = processor(text=prompt_text, videos=vids, return_tensors="pt")
+        full_inputs   = processor(text=prompt_text + cont_text, videos=vids, return_tensors="pt")
+
+        labels = full_inputs.input_ids.clone()
+        labels[:, :prompt_inputs.input_ids.size(1)] = -100  # mask the prompt
+        # with torch.no_grad():
+        loss = model(**full_inputs.to(model.device), labels=labels).loss
+        return -loss  # log P(cont_text | prompt, vids) up to const
+
 
     yes_id = _single_id(" yes")
     no_id  = _single_id(" no")
     log_like = []
-    all_frames = context_frames + [observed_frame]
+    all_frames = [observed_frame]
 
     for hyp in hypotheses:
         conv_obs = [
@@ -184,34 +174,38 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
                 "content": [
                     {"type": "text",
                     "text": f"Here is what has happened so far: {memory_text}"},
-                    {"type": "video"},
                     {"type": "text",
-                    "text": f"Statement: {hyp}\nIs this statement true in the CURRENT frame? "
+                    "text": f"Statement: {hyp}\nIs this statement true in the shown frame? "
                             "Answer 'yes' or 'no'."},
+                    {"type": "video"},
                 ],
             }
         ]
 
         prompt_obs = processor.apply_chat_template(conv_obs, add_generation_prompt=True)   
-        inp_obs = processor(
-            text=prompt_obs,
-            videos=all_frames,                
-            return_tensors="pt"
-        )
+        logp_yes = cont_logprob(prompt_obs, [observed_frame], " yes")
+        logp_no  = cont_logprob(prompt_obs, [observed_frame], " no")
+        # Normalize over the two options to get a proper Bernoulli log-likelihood
+        log_like_h = torch.logsumexp(torch.stack([logp_yes, logp_no]), dim=0)
+        logprob_yes = logp_yes - log_like_h
+        # inp_obs = processor(
+        #     text=prompt_obs,
+        #     videos=all_frames,                
+        #     return_tensors="pt"
+        # )
 
-        logits = model(**inp_obs.to(model.device)).logits[0, -1] 
-        sub_logits = logits[[yes_id, no_id]]             
-        logprob_yes = sub_logits.log_softmax(dim=-1)[0]    # log P(yes|hyp, obs)
+        # logits = model(**inp_obs.to(model.device)).logits[0, -1] 
+        # sub_logits = logits[[yes_id, no_id]]             
+        # logprob_yes = sub_logits.log_softmax(dim=-1)[0]    # log P(yes|hyp, obs)
         log_like.append(logprob_yes)
-        del inp_obs, logits
-        torch.cuda.empty_cache()
-        gc.collect()
-
 
     log_like   = torch.stack(log_like)                                  # (H,)
     log_unnorm = log_prior + log_like                                   # log P*Z - Bayes rule
-    log_post   = log_unnorm - torch.logsumexp(log_unnorm, dim=0)        # log P(h|obs) P_post = torch.softmax(log_unnorm, dim=0)
+    log_post   = log_unnorm - torch.logsumexp(log_unnorm, dim=0)        # log P(h|obs) P_post = torch
     P_post     = log_post.exp()
+    print(f"Prior probs: {P_prior}")
+    print(f"Posterior probs: {P_post}")
+    hypotheses = [hyp.strip().lower() for hyp in hypotheses]
 
 
     kl  = torch.sum(P_post * (log_post - log_prior))
@@ -222,6 +216,7 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
             torch.sum(P_post  * (log_post  - log_mix))
         )
     js_norm = (js / math.log(2.0))
+
     d_js = 0.5 * (P_prior * (log_prior - log_mix) +
                 P_post  * (log_post  - log_mix))           # tensor, same length as hypotheses
 
@@ -231,8 +226,8 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
     ]
     return {
         "hypotheses":      hypotheses,
-        "prior_probs":     P_prior.tolist(),
-        "posterior_probs": P_post.tolist(),
+        "prior_probs":     P_prior,
+        "posterior_probs": P_post,
         "KL_divergence":   kl,
         "JS_divergence": js_norm,
     }
@@ -252,8 +247,6 @@ def run_bayesian_surprise_over_video(video_frames, window_size, num_hypotheses, 
     posteriors = []
     hypotheses = []
 
-    print(video_frames)
-    print("Length of video frames", len(video_frames))
     for i in tqdm(range(window_size, len(video_frames), 1), desc="Processing frames"):
         prior_window = video_frames[i-window_size:i]
         observed_frame = video_frames[i]

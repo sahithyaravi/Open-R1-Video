@@ -346,7 +346,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         emb2 = self.sim_encoder.encode(text2, convert_to_tensor=True)
 
         # 2. Compute cosine similarity between the two embeddings
-        similarity_value = util.cos_sim(emb1, emb2).item()
+        similarity_value = util.cos_sim(emb1, emb2)
 
         return similarity_value
 
@@ -457,8 +457,8 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         loss = -sim_tensor.mean()
 
         # Optionally update metrics stored on ``self`` if the trainer expects them.
-        if hasattr(self, "_metrics") and isinstance(self._metrics, dict):
-            self._metrics.setdefault("cosine_similarity", []).append(sim_tensor.mean().item())
+        # if hasattr(self, "_metrics") and isinstance(self._metrics, dict):
+        #     self._metrics.setdefault("cosine_similarity", []).append(sim_tensor.mean().item())
 
         return loss
 
