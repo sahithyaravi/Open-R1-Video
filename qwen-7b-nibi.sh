@@ -1,9 +1,9 @@
-module load python/3.10.13 
-module load scipy-stack/2024a
-module load gcc opencv/4.11.0
-module load cuda
-module load gcc arrow/16.1.0 
-source /home/sahiravi/projects/def-vshwartz/sahiravi/videor1/bin/activate
+# module load python/3.10.13 
+# module load scipy-stack/2024a
+# module load gcc opencv/4.11.0
+# module load cuda
+# module load gcc arrow/16.1.0 
+# source /home/sahiravi/projects/def-vshwartz/sahiravi/videor1/bin/activate
 
 # display current python venv
 echo "Current Python Virtual Environment:"
@@ -39,7 +39,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --logging_steps 1 \
     --data_seed 42 \
     --report_to wandb \
-    --gradient_checkpointing true \
+    --use_cache true \
     --torch_dtype 'bfloat16' \
     --bf16 true \
     --attn_implementation flash_attention_2 \

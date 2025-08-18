@@ -140,6 +140,9 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         labels[:, :prefix_len] = -100  # score only the continuation
         loss = model(**full_input.to(model.device), labels=labels).loss
         prior_scores.append(-loss)
+        del full_input, labels, loss
+        torch.cuda.empty_cache()
+        gc.collect()
     log_prior_raw = torch.tensor(prior_scores, device=model.device)     # negative log likelihoods
     log_prior = log_prior_raw - torch.logsumexp(log_prior_raw, dim=0)   # log P(h) 
     P_prior   = log_prior.exp()      
@@ -166,7 +169,7 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
     no_id  = _single_id(" no")
     log_like = []
     all_frames = [observed_frame]
-
+    torch.cuda.empty_cache()
     for hyp in hypotheses:
         conv_obs = [
             {
@@ -198,6 +201,10 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         # sub_logits = logits[[yes_id, no_id]]             
         # logprob_yes = sub_logits.log_softmax(dim=-1)[0]    # log P(yes|hyp, obs)
         log_like.append(logprob_yes)
+        del prompt_obs
+        torch.cuda.empty_cache()
+        gc.collect()
+
 
     log_like   = torch.stack(log_like)                                  # (H,)
     log_unnorm = log_prior + log_like                                   # log P*Z - Bayes rule
@@ -224,8 +231,7 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         f"{hyp} (prior: {P_prior[i]:.3f}, posterior: {P_post[i]:.3f}), JS: {d_js[i]:.3f}"
         for i, hyp in enumerate(hypotheses)
     ]
-    torch.cuda.empty_cache()
-    gc.collect()
+
     return {
         "hypotheses":      hypotheses,
         "prior_probs":     P_prior,

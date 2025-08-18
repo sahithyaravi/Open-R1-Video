@@ -423,8 +423,6 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 group_rewards.append(float(reward))
                 caption_texts.append(caption_text)
 
-            # -------- [D/E] BATCHED SCORING of all m captions (grad ON) --------
-            # Build full assistant turns for all captions
             full_texts = []
             for cap in caption_texts:
                 cap_conv_scored = [
@@ -449,41 +447,62 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             # Batch-tokenize the m sequences (same video for each)
             scored_inputs = self.processing_class(
                 text=full_texts,
-                videos=[top_frames] * len(full_texts),   # <<< CHANGED: batch
+                videos=[top_frames] * len(full_texts),
                 return_tensors="pt",
                 padding=True,
             ).to(model.device)
 
             input_ids = scored_inputs["input_ids"]           # [m, L]
             labels = input_ids.clone()
-            labels[:, :prompt_len] = -100                    # <<< CHANGED: score continuation only
+            labels[:, :prompt_len] = -100
 
-            # Policy forward (one graph)
-            out = model(**scored_inputs)
-            logits = out.logits.float()                      # [m, L, V]
+            # ---- NEW: micro-batch over m to cap peak memory ----
+            mb = min(2, input_ids.size(0))   # try 2; set to 1 if still tight
+            sum_logp_chunks = []
+            sum_logp_ref_chunks = []
 
-            # CE per-token, then mask to continuation, then sum per-sample
-            ce = F.cross_entropy(
-                logits[:, :-1, :].reshape(-1, logits.size(-1)),
-                labels[:, 1:].reshape(-1),
-                reduction="none",
-            ).view(logits.size(0), logits.size(1) - 1)       # [m, L-1]
-            token_mask = (labels[:, 1:] != -100).float()
-            ce = ce * token_mask
-            sum_logp = -(ce.sum(dim=1))                      # [m], requires_grad=True
+            for s in range(0, input_ids.size(0), mb):
+                e = s + mb
+                batch = {k: v[s:e] for k, v in scored_inputs.items()}
+                batch_labels = labels[s:e]
 
-            # Reference forward (no grad), batched
-            with torch.no_grad():
-                self.ref_model.eval()
-                ref_out = self.ref_model(**scored_inputs)
-                ref_logits = ref_out.logits.float()
-                ref_ce = F.cross_entropy(
-                    ref_logits[:, :-1, :].reshape(-1, ref_logits.size(-1)),
-                    labels[:, 1:].reshape(-1),
+                # Policy forward (grad ON, no cache)
+                out = model(**batch, use_cache=False)
+                logits = out.logits  # [mb, L, V]
+
+                ce = F.cross_entropy(
+                    logits[:, :-1, :].permute(0, 2, 1),  # (mb, V, L-1)
+                    batch_labels[:, 1:],                 # (mb, L-1)
                     reduction="none",
-                ).view(ref_logits.size(0), ref_logits.size(1) - 1)
-                ref_ce = ref_ce * token_mask
-                sum_logp_ref = -(ref_ce.sum(dim=1))          # [m]
+                    ignore_index=-100, 
+                )                                        # -> (mb, L-1)
+                # token_mask_mb = (batch_labels[:, 1:] != -100).float()
+                # ce = ce * token_mask_mb
+                sum_logp_chunks.append(-(ce.sum(dim=1)))  # [mb]
+
+                # free policy activations early
+                del ce, logits, out
+                torch.cuda.empty_cache()
+
+                # Reference forward (no grad, no cache)
+                with torch.no_grad():
+                    self.ref_model.eval()
+                    ref_out = self.ref_model(**batch, use_cache=False)
+                    ref_logits = ref_out.logits
+                    ref_ce = F.cross_entropy(
+                        ref_logits[:, :-1, :].permute(0, 2, 1),  # (mb, V, L-1)
+                        batch_labels[:, 1:],                      # (mb, L-1)
+                        reduction="none",
+                        ignore_index=-100, 
+                    )
+                    # ref_ce = ref_ce * token_mask_mb
+                    sum_logp_ref_chunks.append(-(ref_ce.sum(dim=1)))  # [mb]
+
+                    del ref_ce, ref_logits, ref_out
+                torch.cuda.empty_cache()
+
+            sum_logp = torch.cat(sum_logp_chunks, dim=0)           # [m]
+            sum_logp_ref = torch.cat(sum_logp_ref_chunks, dim=0)   # [m]
 
             # -------- [G] advantages (float32) --------
             rewards = torch.tensor(group_rewards, device=model.device, dtype=torch.float32)
@@ -492,7 +511,10 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             # -------- [H] GRPO loss --------
             loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
             all_losses.append(loss_ex)
-
+            
+            del ce, logits, out, ref_ce, ref_logits, ref_out
+            torch.cuda.empty_cache() 
+            
         return torch.mean(torch.stack(all_losses))
     
     
