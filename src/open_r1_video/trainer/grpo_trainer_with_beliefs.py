@@ -49,6 +49,7 @@ from trl.trainer.utils import generate_model_card, get_comet_experiment_url
 from sentence_transformers import SentenceTransformer, util
 from qwen_vl_utils import process_vision_info
 from .belief_tracker import qwen_surprise_tracker
+from .weighted_captioning import adaptive_frame_sampling
 from .video_processing import extract_k_frames_decord_cpu
 from typing import List
 from torch.nn import functional as F
@@ -351,117 +352,150 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         return similarity_value
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        """Compute the loss for a batch by captioning videos and comparing to ground truth.
-
-        This method is designed to replace the existing loss computation in the
-        original GRPOTrainer.  All prompt and image processing has been removed.
-        Instead, the method loops over each example in ``inputs``, extracts a
-        fixed number of frames from the provided video, generates a caption via
-        ``qwen_surprise_tracker``, compares the predicted caption with the
-        ground truth caption via cosine similarity, and finally returns the
-        negative mean similarity as the loss.  A higher similarity results in a
-        lower loss, encouraging the model to maximise the match between predicted
-        and ground‑truth descriptions.
-
-        Parameters
-        ----------
-        self : Any
-            An instance of the trainer class.  It is expected to provide an
-            ``accelerator`` attribute with a device for tensor placement.  The
-            ``model`` argument is unused in this implementation but is kept for
-            API compatibility.
-        model : Any
-            The model being trained.  Unused in this implementation.
-        inputs : list of dict
-            A list of input examples.  Each example should include a key
-            ``'video'`` (or ``'video_path'``) pointing to the video file on disk
-            and a key ``'ground_truth'`` containing the ground‑truth caption
-            against which to measure similarity.
-        return_outputs : bool, optional
-            Whether to return model outputs.  This flag is ignored in this
-            implementation; requesting outputs will raise a ``ValueError`` to
-            indicate that the functionality is unsupported.
-        num_items_in_batch : int, optional
-            Unused in this implementation.  Included for API compatibility.
-
-        Returns
-        -------
-        torch.Tensor
-            A scalar tensor representing the loss for the batch.  The loss is
-            computed as the negative mean cosine similarity between predicted and
-            ground‑truth captions across all examples.
-        """
         if return_outputs:
-            raise ValueError(
-                "This customised compute_loss does not support returning outputs"
-            )
-        similarities: List[float] = []
+            raise ValueError("This customised compute_loss does not support returning outputs")
+
+        model.train()
+        all_losses = []
+        m = 4
+        beta = 0.02
 
         for example in inputs:
-            # Retrieve video path.  Support both 'video' and 'video_path' keys.
             video_path = example.get("video") or example.get("video_path")
-            if not video_path:
-                raise KeyError(
-                    "Each input example must include a 'video' or 'video_path' key"
-                )
-
-            # Retrieve ground‑truth caption.  This key must be provided by the caller.
             ground_truth = example.get("ground_truth")
-            if ground_truth is None:
-                raise KeyError(
-                    "Each input example must include a 'ground_truth' caption for comparison"
-                )
 
-            # Extract a fixed number of frames from the video.  Default to k=8
-            try:
+            # ---- Surprise & selection OUTSIDE grad ----
+            with torch.no_grad():
                 frames, frame_indices, total_frames, fps, vr = extract_k_frames_decord_cpu(
                     video_path=video_path, k=8
                 )
-                print(f"Extracted {len(frames)} frames from video {video_path} "
-                      f"({total_frames} total frames at {fps} FPS).")
-            except Exception as e:
-                # Propagate errors during frame extraction to the caller with context
-                raise RuntimeError(
-                    f"Failed to extract frames from video {video_path}: {e}"
-                )
-
-            # Generate caption using the Qwen surprise tracker.  We set
-            # caption_video=True to obtain a textual summary.  Additional arguments
-            # such as window_size and top_k default to recommended values.
-            unwrapped_model = model
-            try:
+                # <<< CHANGED >>> don’t generate inside the tracker
                 result = qwen_surprise_tracker(
                     frames=frames,
                     window_size=4,
                     top_k=3,
                     method="prior_frame_bayesian_approach",
-                    caption_video=True,
+                    caption_video=False,   # <<< CHANGED
                     vr=vr,
-                    model=unwrapped_model,
+                    model=model,
                     processor=self.processing_class,
                 )
-                predicted_caption = result["caption_weighted"]
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to generate caption for video {video_path}: {e}"
+                top_frames, frame_indices = adaptive_frame_sampling(
+                    scores=result["surprise_scores"], vr=vr
                 )
 
+            # ---- Build caption prompt once (uses top_frames) ----
+            cap_conv = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize the key events in the video in one sentence."},
+                    {"type": "video"},
+                ],
+            }]
+            cap_prompt = self.processing_class.apply_chat_template(cap_conv, add_generation_prompt=True)
 
-            # Compute cosine similarity between predicted and ground‑truth captions
-            sim = self._simple_cosine_similarity(predicted_caption, str(ground_truth))
-            similarities.append(sim)
+            # We’ll sample m captions, then score them in one batched pass
+            group_rewards = []
+            caption_texts = []          # <<< CHANGED
+            # (We will fill log-probs later in a batched pass)
+            # group_logps, group_logps_ref removed here
 
-        # Convert similarities to a tensor on the correct device
-        sim_tensor = torch.tensor(similarities, dtype=torch.float16)
-        # Reward is the similarity; loss is negative reward (mean across batch)
-        loss = -sim_tensor.mean()
+            # -------- [C] SAMPLE m captions (no grad) --------
+            for _ in range(m):
+                with torch.no_grad():
+                    gen_inputs = self.processing_class(
+                        text=cap_prompt, videos=top_frames, return_tensors="pt"
+                    ).to(model.device)
+                    gen_out = model.generate(
+                        **gen_inputs,
+                        max_new_tokens=50,
+                        temperature=0.8,
+                        top_p=0.9,
+                        do_sample=True,
+                        return_dict_in_generate=True,
+                    )
+                    generated_ids = gen_out.sequences[0]
+                    caption_text = self.processing_class.tokenizer.decode(
+                        generated_ids, skip_special_tokens=True
+                    )
+                # reward only on final caption
+                reward = self._simple_cosine_similarity(caption_text, str(ground_truth))
+                group_rewards.append(float(reward))
+                caption_texts.append(caption_text)
 
-        # Optionally update metrics stored on ``self`` if the trainer expects them.
-        # if hasattr(self, "_metrics") and isinstance(self._metrics, dict):
-        #     self._metrics.setdefault("cosine_similarity", []).append(sim_tensor.mean().item())
+            # -------- [D/E] BATCHED SCORING of all m captions (grad ON) --------
+            # Build full assistant turns for all captions
+            full_texts = []
+            for cap in caption_texts:
+                cap_conv_scored = [
+                    {"role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize the key events in the video in one sentence."},
+                        {"type": "video"},
+                    ]},
+                    {"role": "assistant", "content": [{"type": "text", "text": cap}]},
+                ]
+                full_texts.append(self.processing_class.apply_chat_template(
+                    cap_conv_scored, add_generation_prompt=False
+                ))
 
-        return loss
+            # Get prompt length (same prompt for all m)
+            with torch.no_grad():
+                prompt_inputs = self.processing_class(
+                    text=cap_prompt, videos=top_frames, return_tensors="pt"
+                ).to(model.device)
+                prompt_len = prompt_inputs["input_ids"].shape[1]
 
+            # Batch-tokenize the m sequences (same video for each)
+            scored_inputs = self.processing_class(
+                text=full_texts,
+                videos=[top_frames] * len(full_texts),   # <<< CHANGED: batch
+                return_tensors="pt",
+                padding=True,
+            ).to(model.device)
+
+            input_ids = scored_inputs["input_ids"]           # [m, L]
+            labels = input_ids.clone()
+            labels[:, :prompt_len] = -100                    # <<< CHANGED: score continuation only
+
+            # Policy forward (one graph)
+            out = model(**scored_inputs)
+            logits = out.logits.float()                      # [m, L, V]
+
+            # CE per-token, then mask to continuation, then sum per-sample
+            ce = F.cross_entropy(
+                logits[:, :-1, :].reshape(-1, logits.size(-1)),
+                labels[:, 1:].reshape(-1),
+                reduction="none",
+            ).view(logits.size(0), logits.size(1) - 1)       # [m, L-1]
+            token_mask = (labels[:, 1:] != -100).float()
+            ce = ce * token_mask
+            sum_logp = -(ce.sum(dim=1))                      # [m], requires_grad=True
+
+            # Reference forward (no grad), batched
+            with torch.no_grad():
+                self.ref_model.eval()
+                ref_out = self.ref_model(**scored_inputs)
+                ref_logits = ref_out.logits.float()
+                ref_ce = F.cross_entropy(
+                    ref_logits[:, :-1, :].reshape(-1, ref_logits.size(-1)),
+                    labels[:, 1:].reshape(-1),
+                    reduction="none",
+                ).view(ref_logits.size(0), ref_logits.size(1) - 1)
+                ref_ce = ref_ce * token_mask
+                sum_logp_ref = -(ref_ce.sum(dim=1))          # [m]
+
+            # -------- [G] advantages (float32) --------
+            rewards = torch.tensor(group_rewards, device=model.device, dtype=torch.float32)
+            adv = ((rewards - rewards.mean()) / (rewards.std() + 1e-6)).detach()
+
+            # -------- [H] GRPO loss --------
+            loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
+            all_losses.append(loss_ex)
+
+        return torch.mean(torch.stack(all_losses))
+    
+    
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}

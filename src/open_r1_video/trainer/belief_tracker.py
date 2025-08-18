@@ -224,6 +224,8 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
         f"{hyp} (prior: {P_prior[i]:.3f}, posterior: {P_post[i]:.3f}), JS: {d_js[i]:.3f}"
         for i, hyp in enumerate(hypotheses)
     ]
+    torch.cuda.empty_cache()
+    gc.collect()
     return {
         "hypotheses":      hypotheses,
         "prior_probs":     P_prior,
