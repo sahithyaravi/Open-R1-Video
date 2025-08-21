@@ -17,7 +17,7 @@ import os
 import textwrap
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
-
+import gc
 import torch
 import torch.utils.data
 import transformers
@@ -356,8 +356,8 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             raise ValueError("This customised compute_loss does not support returning outputs")
 
         
-        all_losses = []
-        m = 4
+        total_loss = torch.tensor(0.0, device=model.device, requires_grad=True)
+        m = 2
         beta = 0.02
 
         for example in inputs:
@@ -423,11 +423,16 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 reward = self._simple_cosine_similarity(caption_text, str(ground_truth))
                 group_rewards.append(float(reward))
                 caption_texts.append(caption_text)
+                      # Get prompt length once
+            with torch.no_grad():
+                prompt_inputs = self.processing_class(
+                    text=cap_prompt, videos=top_frames, return_tensors="pt"
+                ).to(model.device)
+                prompt_len = prompt_inputs["input_ids"].shape[1]
 
-            # -------- [D/E] BATCHED SCORING of all m captions (grad ON) --------
-            # Build full assistant turns for all captions
-            full_texts = []
+            sum_logp_list = []
             for cap in caption_texts:
+                # Build the full conversation for this single caption
                 cap_conv_scored = [
                     {"role": "user",
                     "content": [
@@ -436,44 +441,49 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                     ]},
                     {"role": "assistant", "content": [{"type": "text", "text": cap}]},
                 ]
-                full_texts.append(self.processing_class.apply_chat_template(
+                full_text = self.processing_class.apply_chat_template(
                     cap_conv_scored, add_generation_prompt=False
-                ))
+                )
 
-            # Get prompt length (same prompt for all m)
-            with torch.no_grad():
-                prompt_inputs = self.processing_class(
-                    text=cap_prompt, videos=top_frames, return_tensors="pt"
+                # Tokenize the single example
+                scored_inputs = self.processing_class(
+                    text=full_text,
+                    videos=top_frames, # Pass video frames for just this one sample
+                    return_tensors="pt",
                 ).to(model.device)
-                prompt_len = prompt_inputs["input_ids"].shape[1]
 
-            # Batch-tokenize the m sequences (same video for each)
-            scored_inputs = self.processing_class(
-                text=full_texts,
-                videos=[top_frames] * len(full_texts), 
-                return_tensors="pt",
-                padding=True,
-            ).to(model.device)
+                input_ids = scored_inputs["input_ids"]
+                labels = input_ids.clone()
+                labels[:, :prompt_len] = -100 # Mask prompt tokens
 
-            input_ids = scored_inputs["input_ids"]           # [m, L]
-            labels = input_ids.clone()
-            labels[:, :prompt_len] = -100                    # <<< CHANGED: score continuation only
+                # Policy forward pass for a single caption
+                out = model(**scored_inputs)
+                logits = out.logits.float()
 
-            # Policy forward (one graph)
-            out = model(**scored_inputs)
-            logits = out.logits.float()                      # [m, L, V]
+                # Calculate cross-entropy loss for the tokens of this caption
+                ce = F.cross_entropy(
+                    logits[:, :-1, :].reshape(-1, logits.size(-1)),
+                    labels[:, 1:].reshape(-1),
+                    reduction="none",
+                )
+                
+                # Reshape and mask to get per-token loss for the sequence
+                ce = ce.view(1, -1) # Reshape to [1, L-1]
+                token_mask = (labels[:, 1:] != -100).float()
+                ce = ce * token_mask
 
-            # CE per-token, then mask to continuation, then sum per-sample
-            ce = F.cross_entropy(
-                logits[:, :-1, :].reshape(-1, logits.size(-1)),
-                labels[:, 1:].reshape(-1),
-                reduction="none",
-            ).view(logits.size(0), logits.size(1) - 1)       # [m, L-1]
-            token_mask = (labels[:, 1:] != -100).float()
-            ce = ce * token_mask
-            sum_logp = -(ce.sum(dim=1))                      # [m], requires_grad=True
-            # Print 
-            print("Cross entropy loss", ce)
+                # Sum the log-probabilities for this caption and append to list
+                sum_logp_list.append(-(ce.sum()))
+
+                # Explicitly delete tensors to free memory
+                del scored_inputs, out, logits, ce, token_mask
+                torch.cuda.empty_cache()
+                gc.collect()
+
+
+            sum_logp = torch.stack(sum_logp_list) # shape [m], requires_grad=True
+            print("Cross entropy losses calculated serially.", sum_logp)
+
             # Reference forward (no grad), batched
             # ----- SIMPLE REFERENCE SCORING (no slicing) -----
             sum_logp_ref_list = []
@@ -512,10 +522,10 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
                     sum_logp_ref_list.append(sum_logp_ref_i.to(model.device))
 
-                    # free quickly
+
                     del mb, labels_mb, out_ref
-                    if ref_device.type == "cuda":
-                        torch.cuda.empty_cache()
+                    torch.cuda.empty_cache()
+                    gc.collect()
 
             sum_logp_ref = torch.stack(sum_logp_ref_list)  # shape [m]
 
@@ -525,9 +535,14 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
             # -------- [H] GRPO loss --------
             loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
-            all_losses.append(loss_ex)
+            total_loss = total_loss + loss_ex
+            print(f"Loss for this example: {loss_ex.item()}")
+            torch.cuda.empty_cache()
+            gc.collect()
 
-        return torch.mean(torch.stack(all_losses))
+        if len(inputs) == 0:
+            return total_loss # Return 0 if batch is empty
+        return total_loss / len(inputs)
         
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics

@@ -25,6 +25,8 @@ export WANDB_PROJECT=Qwen2-VL-7B-Video-GRPO-dummy
 export WANDB_NAME=llava-video-4k-remove-formatreward-matchletterreward-f16-full
 export FLASH_ATTENTION_USE_TILED=1
 export FLASH_ATTENTION_BLOCK_HEURISTIC=2
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
+
 
 mkdir -p data/wangxd/ckpt/$WANDB_PROJECT/$WANDB_NAME
 # conda install av -c conda-forgeQwen/Qwen2.5-VL-7B-Instruct
@@ -56,7 +58,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --run_name $WANDB_NAME \
     --save_steps 100 \
     --num_generations 4\
-    --max_pixels 200704\
     --save_only_model true
 
 
