@@ -40,7 +40,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
     --dataset_name xxx \
     --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-beliefs.jsonl \
-    --max_prompt_length 16384 \
+    --max_prompt_length 8192 \
     --learning_rate 1e-6 \
     --beta 0.1 \
     --per_device_train_batch_size 1 \

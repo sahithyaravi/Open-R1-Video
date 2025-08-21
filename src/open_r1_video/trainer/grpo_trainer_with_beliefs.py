@@ -355,7 +355,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         if return_outputs:
             raise ValueError("This customised compute_loss does not support returning outputs")
 
-        model.train()
+        
         all_losses = []
         m = 4
         beta = 0.02
@@ -383,6 +383,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 top_frames, frame_indices = adaptive_frame_sampling(
                     scores=result["surprise_scores"], vr=vr
                 )
+                print("Surprise scores:", result["surprise_scores"])
 
             # ---- Build caption prompt once (uses top_frames) ----
             cap_conv = [{
@@ -423,6 +424,8 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 group_rewards.append(float(reward))
                 caption_texts.append(caption_text)
 
+            # -------- [D/E] BATCHED SCORING of all m captions (grad ON) --------
+            # Build full assistant turns for all captions
             full_texts = []
             for cap in caption_texts:
                 cap_conv_scored = [
@@ -447,62 +450,74 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             # Batch-tokenize the m sequences (same video for each)
             scored_inputs = self.processing_class(
                 text=full_texts,
-                videos=[top_frames] * len(full_texts),
+                videos=[top_frames] * len(full_texts), 
                 return_tensors="pt",
                 padding=True,
             ).to(model.device)
 
             input_ids = scored_inputs["input_ids"]           # [m, L]
             labels = input_ids.clone()
-            labels[:, :prompt_len] = -100
+            labels[:, :prompt_len] = -100                    # <<< CHANGED: score continuation only
 
-            # ---- NEW: micro-batch over m to cap peak memory ----
-            mb = min(2, input_ids.size(0))   # try 2; set to 1 if still tight
-            sum_logp_chunks = []
-            sum_logp_ref_chunks = []
+            # Policy forward (one graph)
+            out = model(**scored_inputs)
+            logits = out.logits.float()                      # [m, L, V]
 
-            for s in range(0, input_ids.size(0), mb):
-                e = s + mb
-                batch = {k: v[s:e] for k, v in scored_inputs.items()}
-                batch_labels = labels[s:e]
+            # CE per-token, then mask to continuation, then sum per-sample
+            ce = F.cross_entropy(
+                logits[:, :-1, :].reshape(-1, logits.size(-1)),
+                labels[:, 1:].reshape(-1),
+                reduction="none",
+            ).view(logits.size(0), logits.size(1) - 1)       # [m, L-1]
+            token_mask = (labels[:, 1:] != -100).float()
+            ce = ce * token_mask
+            sum_logp = -(ce.sum(dim=1))                      # [m], requires_grad=True
+            # Print 
+            print("Cross entropy loss", ce)
+            # Reference forward (no grad), batched
+            # ----- SIMPLE REFERENCE SCORING (no slicing) -----
+            sum_logp_ref_list = []
+            ref_device = next(self.ref_model.parameters()).device  # e.g., "cuda:1" or "cpu"
 
-                # Policy forward (grad ON, no cache)
-                out = model(**batch, use_cache=False)
-                logits = out.logits  # [mb, L, V]
-
-                ce = F.cross_entropy(
-                    logits[:, :-1, :].permute(0, 2, 1),  # (mb, V, L-1)
-                    batch_labels[:, 1:],                 # (mb, L-1)
-                    reduction="none",
-                    ignore_index=-100, 
-                )                                        # -> (mb, L-1)
-                # token_mask_mb = (batch_labels[:, 1:] != -100).float()
-                # ce = ce * token_mask_mb
-                sum_logp_chunks.append(-(ce.sum(dim=1)))  # [mb]
-
-                # free policy activations early
-                del ce, logits, out
-                torch.cuda.empty_cache()
-
-                # Reference forward (no grad, no cache)
-                with torch.no_grad():
-                    self.ref_model.eval()
-                    ref_out = self.ref_model(**batch, use_cache=False)
-                    ref_logits = ref_out.logits
-                    ref_ce = F.cross_entropy(
-                        ref_logits[:, :-1, :].permute(0, 2, 1),  # (mb, V, L-1)
-                        batch_labels[:, 1:],                      # (mb, L-1)
-                        reduction="none",
-                        ignore_index=-100, 
+            with torch.inference_mode():
+                # prompt_len computed earlier from cap_prompt + top_frames
+                for cap in caption_texts:
+                    # Rebuild full text for THIS caption
+                    conv = [
+                        {"role": "user",
+                        "content": [
+                            {"type": "text", "text": "Summarize the key events in the video in one sentence."},
+                            {"type": "video"},
+                        ]},
+                        {"role": "assistant", "content": [{"type": "text", "text": cap}]},
+                    ]
+                    full_text = self.processing_class.apply_chat_template(
+                        conv, add_generation_prompt=False
                     )
-                    # ref_ce = ref_ce * token_mask_mb
-                    sum_logp_ref_chunks.append(-(ref_ce.sum(dim=1)))  # [mb]
 
-                    del ref_ce, ref_logits, ref_out
-                torch.cuda.empty_cache()
+                    # Re-tokenize for this single sample
+                    mb = self.processing_class(text=full_text, videos=top_frames, return_tensors="pt")
+                    labels_mb = mb["input_ids"].clone()
+                    labels_mb[:, :prompt_len] = -100  # score continuation only
 
-            sum_logp = torch.cat(sum_logp_chunks, dim=0)           # [m]
-            sum_logp_ref = torch.cat(sum_logp_ref_chunks, dim=0)   # [m]
+                    mb = {k: v.to(ref_device) for k, v in mb.items()}
+                    labels_mb = labels_mb.to(ref_device)
+
+                    # bf16 autocast if on GPU
+                    ctx = torch.autocast("cuda", dtype=torch.bfloat16)
+                    with ctx:
+                        out_ref = self.ref_model(**mb, labels=labels_mb)  # mean CE over labeled tokens
+                        num_lab = (labels_mb != -100).sum()
+                        sum_logp_ref_i = -(out_ref.loss.float() * num_lab)
+
+                    sum_logp_ref_list.append(sum_logp_ref_i.to(model.device))
+
+                    # free quickly
+                    del mb, labels_mb, out_ref
+                    if ref_device.type == "cuda":
+                        torch.cuda.empty_cache()
+
+            sum_logp_ref = torch.stack(sum_logp_ref_list)  # shape [m]
 
             # -------- [G] advantages (float32) --------
             rewards = torch.tensor(group_rewards, device=model.device, dtype=torch.float32)
@@ -511,13 +526,9 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             # -------- [H] GRPO loss --------
             loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
             all_losses.append(loss_ex)
-            
-            del ce, logits, out, ref_ce, ref_logits, ref_out
-            torch.cuda.empty_cache() 
-            
+
         return torch.mean(torch.stack(all_losses))
-    
-    
+        
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
