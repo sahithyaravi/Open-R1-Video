@@ -58,6 +58,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --run_name $WANDB_NAME \
     --save_steps 100 \
     --num_generations 4\
+    --max_pixels 262144 \
     --save_only_model true
 
 

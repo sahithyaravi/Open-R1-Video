@@ -210,8 +210,6 @@ def qwen_bayesian_surprise_text_future(memory_text: str, context_frames: List[Im
     log_unnorm = log_prior + log_like                                   # log P*Z - Bayes rule
     log_post   = log_unnorm - torch.logsumexp(log_unnorm, dim=0)        # log P(h|obs) P_post = torch
     P_post     = log_post.exp()
-    print(f"Prior probs: {P_prior}")
-    print(f"Posterior probs: {P_post}")
     hypotheses = [hyp.strip().lower() for hyp in hypotheses]
 
 
@@ -255,7 +253,7 @@ def run_bayesian_surprise_over_video(video_frames, window_size, num_hypotheses, 
     posteriors = []
     hypotheses = []
 
-    for i in tqdm(range(window_size, len(video_frames), 1), desc="Processing frames"):
+    for i in tqdm(range(window_size, len(video_frames), 1)):
         prior_window = video_frames[i-window_size:i]
         observed_frame = video_frames[i]
         running_memory = summarize_memory(running_memory)
@@ -281,7 +279,6 @@ def run_bayesian_surprise_over_video(video_frames, window_size, num_hypotheses, 
         priors.append(result["prior_probs"])
         posteriors.append(result["posterior_probs"])
         hypotheses.append(result["hypotheses"])
-        print(f"############################ Finished processing frame {i} ############################")
 
     # Pad 0s for the first few frames where we don't have enough context
     for _ in range(window_size):
@@ -315,7 +312,6 @@ def qwen_surprise_tracker(
     Process the video to extract frames and save them to the output directory.
     """
 
-    print(f"Using method: {method}")
     surprise_output = run_bayesian_surprise_over_video(
         video_frames=frames,
         window_size=window_size,
@@ -325,9 +321,6 @@ def qwen_surprise_tracker(
         processor=processor
 
     )
-
-    print("Computed surprise scores for all frames.")
-    print("Explanations", surprise_output["explanations"])
 
     if caption_video:
         caption_weighted, sampled_frames_weighted = caption_by_weight(
@@ -346,8 +339,6 @@ def qwen_surprise_tracker(
             vr = vr
      
         )
-        print("caption_weighted", caption_weighted)
-        print("caption_unweighted", caption_unweighted)
         surprise_output["caption_weighted"] = caption_weighted
         surprise_output["caption_unweighted"] = caption_unweighted
         surprise_output["sampled_frames_weighted"] = sampled_frames_weighted

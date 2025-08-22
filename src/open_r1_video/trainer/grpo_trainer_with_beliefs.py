@@ -352,30 +352,22 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         return similarity_value
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("This customised compute_loss does not support returning outputs")
-
-        
         total_loss = torch.tensor(0.0, device=model.device, requires_grad=True)
         m = 2
         beta = 0.02
-
         for example in inputs:
             video_path = example.get("video") or example.get("video_path")
             ground_truth = example.get("ground_truth")
-
-            # ---- Surprise & selection OUTSIDE grad ----
             with torch.no_grad():
                 frames, frame_indices, total_frames, fps, vr = extract_k_frames_decord_cpu(
                     video_path=video_path, k=8
                 )
-                # <<< CHANGED >>> don’t generate inside the tracker
                 result = qwen_surprise_tracker(
                     frames=frames,
                     window_size=4,
                     top_k=3,
                     method="prior_frame_bayesian_approach",
-                    caption_video=False,   # <<< CHANGED
+                    caption_video=False,   
                     vr=vr,
                     model=model,
                     processor=self.processing_class,
@@ -383,9 +375,6 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 top_frames, frame_indices = adaptive_frame_sampling(
                     scores=result["surprise_scores"], vr=vr
                 )
-                print("Surprise scores:", result["surprise_scores"])
-
-            # ---- Build caption prompt once (uses top_frames) ----
             cap_conv = [{
                 "role": "user",
                 "content": [
@@ -394,14 +383,8 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 ],
             }]
             cap_prompt = self.processing_class.apply_chat_template(cap_conv, add_generation_prompt=True)
-
-            # We’ll sample m captions, then score them in one batched pass
             group_rewards = []
-            caption_texts = []          # <<< CHANGED
-            # (We will fill log-probs later in a batched pass)
-            # group_logps, group_logps_ref removed here
-
-            # -------- [C] SAMPLE m captions (no grad) --------
+            caption_texts = []       
             for _ in range(m):
                 with torch.no_grad():
                     gen_inputs = self.processing_class(
@@ -431,6 +414,8 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 prompt_len = prompt_inputs["input_ids"].shape[1]
 
             sum_logp_list = []
+            sum_logp_ref_list = []
+            ref_device = next(self.ref_model.parameters()).device 
             for cap in caption_texts:
                 # Build the full conversation for this single caption
                 cap_conv_scored = [
@@ -454,58 +439,23 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
                 input_ids = scored_inputs["input_ids"]
                 labels = input_ids.clone()
-                labels[:, :prompt_len] = -100 # Mask prompt tokens
+                labels[:, :prompt_len] = -100 
 
-                # Policy forward pass for a single caption
-                out = model(**scored_inputs)
-                logits = out.logits.float()
+                # bf16 autocast if on GPU
+                ctx = torch.autocast("cuda", dtype=torch.bfloat16)
+                with ctx:
+                    out = self.ref_model(**scored_inputs, labels=labels)  # mean CE over labeled tokens
+                    num_lab = (labels != -100).sum()
+                    sum_logp_i = -(out.loss.float() * num_lab)
 
-                # Calculate cross-entropy loss for the tokens of this caption
-                ce = F.cross_entropy(
-                    logits[:, :-1, :].reshape(-1, logits.size(-1)),
-                    labels[:, 1:].reshape(-1),
-                    reduction="none",
-                )
-                
-                # Reshape and mask to get per-token loss for the sequence
-                ce = ce.view(1, -1) # Reshape to [1, L-1]
-                token_mask = (labels[:, 1:] != -100).float()
-                ce = ce * token_mask
-
-                # Sum the log-probabilities for this caption and append to list
-                sum_logp_list.append(-(ce.sum()))
+                sum_logp_list.append(sum_logp_i.to(model.device))
 
                 # Explicitly delete tensors to free memory
-                del scored_inputs, out, logits, ce, token_mask
+                del scored_inputs
                 torch.cuda.empty_cache()
                 gc.collect()
 
-
-            sum_logp = torch.stack(sum_logp_list) # shape [m], requires_grad=True
-            print("Cross entropy losses calculated serially.", sum_logp)
-
-            # Reference forward (no grad), batched
-            # ----- SIMPLE REFERENCE SCORING (no slicing) -----
-            sum_logp_ref_list = []
-            ref_device = next(self.ref_model.parameters()).device  # e.g., "cuda:1" or "cpu"
-
-            with torch.inference_mode():
-                # prompt_len computed earlier from cap_prompt + top_frames
-                for cap in caption_texts:
-                    # Rebuild full text for THIS caption
-                    conv = [
-                        {"role": "user",
-                        "content": [
-                            {"type": "text", "text": "Summarize the key events in the video in one sentence."},
-                            {"type": "video"},
-                        ]},
-                        {"role": "assistant", "content": [{"type": "text", "text": cap}]},
-                    ]
-                    full_text = self.processing_class.apply_chat_template(
-                        conv, add_generation_prompt=False
-                    )
-
-                    # Re-tokenize for this single sample
+                with torch.inference_mode():
                     mb = self.processing_class(text=full_text, videos=top_frames, return_tensors="pt")
                     labels_mb = mb["input_ids"].clone()
                     labels_mb[:, :prompt_len] = -100  # score continuation only
@@ -522,10 +472,9 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
                     sum_logp_ref_list.append(sum_logp_ref_i.to(model.device))
 
-
-                    del mb, labels_mb, out_ref
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                del mb, labels_mb, out_ref
+                torch.cuda.empty_cache()
+                gc.collect()
 
             sum_logp_ref = torch.stack(sum_logp_ref_list)  # shape [m]
 
@@ -534,12 +483,12 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             adv = ((rewards - rewards.mean()) / (rewards.std() + 1e-6)).detach()
 
             # -------- [H] GRPO loss --------
+            sum_logp = torch.stack(sum_logp_list) # shape [m], requires_grad=True
             loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
             total_loss = total_loss + loss_ex
-            print(f"Loss for this example: {loss_ex.item()}")
+           
             torch.cuda.empty_cache()
             gc.collect()
-
         if len(inputs) == 0:
             return total_loss # Return 0 if batch is empty
         return total_loss / len(inputs)

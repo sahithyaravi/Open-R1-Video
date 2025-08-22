@@ -32,7 +32,6 @@ def adaptive_frame_sampling(
     remaining_frames = max_frames - n_intervals
    
     if len(set(scores)) == 1:
-        print("All scores are equal, distributing remaining frames uniformly.")
         extra_allocation = np.full(n_intervals, remaining_frames // n_intervals, dtype=int)
         for i in range(remaining_frames % n_intervals):
             extra_allocation[i] += 1
