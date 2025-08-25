@@ -5,7 +5,6 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=0
 #SBATCH --time=10:10:00
-deactivate
 module load python/3.10.13 
 module load scipy-stack/2024a
 module load gcc opencv/4.11.0
@@ -41,7 +40,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --output_dir data/ckpt/$WANDB_PROJECT/$WANDB_NAME \
     --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
     --dataset_name xxx \
-    --jsonl_path /home/sahiravi/scratch/data/LLaVA-Video-large-swift-beliefs.jsonl \
+    --jsonl_path /home/sahiravi/projects/aip-vshwartz/sahiravi/Open-R1-Video/data/ActivityNet_Captions/activitynet_captions_train.json \
     --max_prompt_length 8192 \
     --learning_rate 1e-6 \
     --beta 0.1 \

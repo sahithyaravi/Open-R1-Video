@@ -51,8 +51,11 @@ from qwen_vl_utils import process_vision_info
 from .belief_tracker import qwen_surprise_tracker
 from .weighted_captioning import adaptive_frame_sampling
 from .video_processing import extract_k_frames_decord_cpu
+from .dataset import get_data
+
 from typing import List
 from torch.nn import functional as F
+
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
@@ -356,8 +359,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         m = 2
         beta = 0.02
         for example in inputs:
-            video_path = example.get("video") or example.get("video_path")
-            ground_truth = example.get("ground_truth")
+            video_path, ground_truth = get_data(example)
             with torch.no_grad():
                 frames, frame_indices, total_frames, fps, vr = extract_k_frames_decord_cpu(
                     video_path=video_path, k=8
@@ -486,9 +488,9 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
             sum_logp = torch.stack(sum_logp_list) # shape [m], requires_grad=True
             loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
             total_loss = total_loss + loss_ex
-           
             torch.cuda.empty_cache()
             gc.collect()
+
         if len(inputs) == 0:
             return total_loss # Return 0 if batch is empty
         return total_loss / len(inputs)

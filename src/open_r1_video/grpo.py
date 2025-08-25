@@ -175,7 +175,7 @@ def main(script_args, training_args, model_args):
                         {"type": "video"},
                         # {"type": "video", "video": example["video"]},
                         # {"type": "video", "bytes": open(example["video"],"rb").read()},
-                        {"type": "text", "text": QUESTION_TEMPLATE.format(Question=example["problem"])},
+                        {"type": "text", "text": "Caption this video. "},
                     ],
                 },
             ],
