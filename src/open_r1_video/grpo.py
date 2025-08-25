@@ -24,7 +24,7 @@ from transformers import Qwen2VLForConditionalGeneration
 from math_verify import parse, verify
 from open_r1_video.trainer import Qwen2VLGRPOTrainer, Qwen2VLGRPOTrainerBelief
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
-
+from llm_match_reward import HuggingFaceLLMReward
 
 @dataclass
 class GRPOScriptArguments(ScriptArguments):
@@ -110,8 +110,9 @@ def format_reward(completions, **kwargs):
 
 
 reward_funcs_registry = {
-    "accuracy": accuracy_reward,
-    "format": format_reward,
+    # "accuracy": accuracy_reward,
+    # "format": format_reward,
+    "llm_match": HuggingFaceLLMReward(),
 }
 
 SYSTEM_PROMPT = (
