@@ -53,7 +53,7 @@ class HuggingFaceLLMReward:
             else:
                 self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         
-        print(f"Model loaded on {self.device}, parameters: ~{self._count_parameters():.1f}M")
+        print(f"Model loaded on {self.device}")
     
     @torch.no_grad()
     def __call__(self, responses: List[str], ground_truths: List[str]) -> torch.Tensor:

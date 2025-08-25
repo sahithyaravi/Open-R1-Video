@@ -358,6 +358,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
         total_loss = torch.tensor(0.0, device=model.device, requires_grad=True)
         m = 2
         beta = 0.02
+
         for example in inputs:
             video_path, ground_truth = get_data(example)
             with torch.no_grad():
@@ -377,6 +378,7 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 top_frames, frame_indices = adaptive_frame_sampling(
                     scores=result["surprise_scores"], vr=vr
                 )
+
             cap_conv = [{
                 "role": "user",
                 "content": [
@@ -385,8 +387,9 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                 ],
             }]
             cap_prompt = self.processing_class.apply_chat_template(cap_conv, add_generation_prompt=True)
-            group_rewards = []
-            caption_texts = []       
+
+            # Generate m captions
+            caption_texts = []
             for _ in range(m):
                 with torch.no_grad():
                     gen_inputs = self.processing_class(
@@ -404,22 +407,59 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                     caption_text = self.processing_class.tokenizer.decode(
                         generated_ids, skip_special_tokens=True
                     )
-                # reward only on final caption
-                reward = self._simple_cosine_similarity(caption_text, str(ground_truth))
-                group_rewards.append(float(reward))
-                caption_texts.append(caption_text)
-                      # Get prompt length once
+                caption_texts.append(caption_text)  
+            
+            # Compute prompt length for log-prob scoring later
             with torch.no_grad():
                 prompt_inputs = self.processing_class(
                     text=cap_prompt, videos=top_frames, return_tensors="pt"
                 ).to(model.device)
                 prompt_len = prompt_inputs["input_ids"].shape[1]
 
+            # ------------------- Score candidates with LLM-match reward -------------------
+            reward_extra = {}  
+            try:  
+                if getattr(self, "reward_func", None) is not None:
+                    rewards_out = self.reward_func(
+                        prompts=[str(ground_truth)],              
+                        candidates=[caption_texts],               
+                        refs=[str(ground_truth)],                 
+                        device=model.device,                      
+                    )
+                    if isinstance(rewards_out, tuple):          
+                        rewards_tensor, reward_extra = rewards_out
+                    else:
+                        rewards_tensor, reward_extra = rewards_out, {}
+
+                    rewards_tensor = torch.as_tensor(           
+                        rewards_tensor,
+                        dtype=torch.float32, device=model.device
+                    )
+                    if rewards_tensor.dim() == 2:                
+                        rewards_tensor = rewards_tensor[0]
+                    group_rewards = rewards_tensor.tolist()      
+                else:
+                    group_rewards = [self._simple_cosine_similarity(c, str(ground_truth)) for c in caption_texts]  
+            except TypeError:
+                try:
+                    rewards_tensor = torch.as_tensor(
+                        self.reward_func(caption_texts, [str(ground_truth)]*len(caption_texts)),
+                        dtype=torch.float32, device=model.device
+                    )
+                except TypeError:
+                    rewards_tensor = torch.as_tensor(
+                        self.reward_func(caption_texts),
+                        dtype=torch.float32, device=model.device
+                    )
+                group_rewards = rewards_tensor.tolist()
+            except Exception as e:
+                group_rewards = [self._simple_cosine_similarity(c, str(ground_truth)) for c in caption_texts]
+                reward_extra = {"llm_reward_error": str(e)}
+
             sum_logp_list = []
             sum_logp_ref_list = []
-            ref_device = next(self.ref_model.parameters()).device 
+            ref_device = next(self.ref_model.parameters()).device
             for cap in caption_texts:
-                # Build the full conversation for this single caption
                 cap_conv_scored = [
                     {"role": "user",
                     "content": [
@@ -432,18 +472,17 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                     cap_conv_scored, add_generation_prompt=False
                 )
 
-                # Tokenize the single example
                 scored_inputs = self.processing_class(
                     text=full_text,
-                    videos=top_frames, # Pass video frames for just this one sample
+                    videos=top_frames,  # Pass video frames for just this one sample
                     return_tensors="pt",
                 ).to(model.device)
 
                 input_ids = scored_inputs["input_ids"]
                 labels = input_ids.clone()
-                labels[:, :prompt_len] = -100 
+                labels[:, :prompt_len] = -100
 
-                # bf16 autocast if on GPU
+                # NOTE: If you intended gradient w.r.t current model, use `model` here (not ref_model).
                 ctx = torch.autocast("cuda", dtype=torch.bfloat16)
                 with ctx:
                     out = self.ref_model(**scored_inputs, labels=labels)  # mean CE over labeled tokens
@@ -452,7 +491,6 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
                 sum_logp_list.append(sum_logp_i.to(model.device))
 
-                # Explicitly delete tensors to free memory
                 del scored_inputs
                 torch.cuda.empty_cache()
                 gc.collect()
@@ -465,10 +503,9 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
                     mb = {k: v.to(ref_device) for k, v in mb.items()}
                     labels_mb = labels_mb.to(ref_device)
 
-                    # bf16 autocast if on GPU
                     ctx = torch.autocast("cuda", dtype=torch.bfloat16)
                     with ctx:
-                        out_ref = self.ref_model(**mb, labels=labels_mb)  # mean CE over labeled tokens
+                        out_ref = self.ref_model(**mb, labels=labels_mb)
                         num_lab = (labels_mb != -100).sum()
                         sum_logp_ref_i = -(out_ref.loss.float() * num_lab)
 
@@ -480,19 +517,44 @@ class Qwen2VLGRPOTrainerBelief(Trainer):
 
             sum_logp_ref = torch.stack(sum_logp_ref_list)  # shape [m]
 
-            # -------- [G] advantages (float32) --------
+            # ------------------- GRPO advantages (group-wise) -------------------
             rewards = torch.tensor(group_rewards, device=model.device, dtype=torch.float32)
             adv = ((rewards - rewards.mean()) / (rewards.std() + 1e-6)).detach()
 
-            # -------- [H] GRPO loss --------
-            sum_logp = torch.stack(sum_logp_list) # shape [m], requires_grad=True
+            # ------------------- GRPO loss (policy + KL) -------------------
+            sum_logp = torch.stack(sum_logp_list)  # shape [m], requires_grad=True
             loss_ex = -torch.mean(adv * (sum_logp - beta * sum_logp_ref))
             total_loss = total_loss + loss_ex
+
+            # ------------------- Logging (mirror your GRPO trainer style) -------------------
+            # NEW: log reward stats, advantage stats, KL proxy, and per-example loss
+            try:
+                kl_seq_mean = (sum_logp - sum_logp_ref).mean().detach().item()  # NEW
+                logs = {  # NEW
+                    "loss/example": float(loss_ex.detach().item()),
+                    "rewards/mean": float(rewards.mean().detach().item()),
+                    "rewards/std": float(rewards.std().detach().item()),
+                    "adv/mean": float(adv.mean().detach().item()),
+                    "adv/std": float(adv.std().detach().item()),
+                    "kl/seq_mean": float(kl_seq_mean),
+                }
+                # Fold in numeric extras from the LLM reward, if any                 # NEW
+                for k, v in (reward_extra or {}).items():
+                    if isinstance(v, (int, float)):
+                        logs[f"reward_extra/{k}"] = float(v)
+
+                if hasattr(self, "accelerator") and self.accelerator is not None and self.accelerator.is_main_process:
+                    self.accelerator.log(logs, step=self.state.global_step)      # NEW
+                else:
+                    self.log(logs)                                               # NEW
+            except Exception:
+                pass  # don't let logging crash training                         # NEW
+
             torch.cuda.empty_cache()
             gc.collect()
 
         if len(inputs) == 0:
-            return total_loss # Return 0 if batch is empty
+            return total_loss  # Return 0 if batch is empty
         return total_loss / len(inputs)
         
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:

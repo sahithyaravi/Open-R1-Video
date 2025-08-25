@@ -134,7 +134,7 @@ def create_dataset_from_jsonl_simple(jsonl_path):
 
 def main(script_args, training_args, model_args):
     # Get reward functions
-    reward_funcs = [reward_funcs_registry[func] for func in script_args.reward_funcs]
+    reward_funcs = [reward_funcs_registry[func] for func in reward_funcs_registry]
     
     if script_args.jsonl_path:
         # # load dataset from jsonl
